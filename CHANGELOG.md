@@ -15,5 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sprite sources in `sprites/` and generated sheet `lemmy.png`.
 - Python tools to build the sprite sheet, icon and halo (`tools/`).
 - MinGW cross-compilation `Makefile`.
-- Tray option to show random characters in the typed-keys bubble
-  instead of the real keys, for privacy (`ScrambleKeys` setting).
+- Typing bubble shows Lemmy lines (`lyrics.txt` next to the exe, or
+  built-in Motorhead song titles) instead of the typed keys, one
+  character per keystroke; any key, modifiers included, triggers it.
+- README with features, usage, build instructions and an animated demo.
+- `tools/make_demo.py` builds `demo.gif` (transparent background) from
+  the sprite sheet.
+
+### Changed
+
+- Tray menu translated from French to English.

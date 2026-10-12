@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -46,10 +47,10 @@ constexpr double kFadedRatio = 0.47;    // opacity multiplier while the cursor i
 constexpr double kFadeSpeed = 1500.0;    // alpha units per second
 constexpr ULONGLONG kTypeLingerMs = 2000;  // keeps typing this long after the user's last keystroke
 constexpr ULONGLONG kTypeBurstMs = 1500;   // two keystrokes this close start a typing session
-constexpr ULONGLONG kBubbleLingerMs = 5000;  // typed text stays in the bubble this long after the last keystroke
-constexpr size_t kBubbleMaxChars = 12;     // typed characters shown in the bubble
+constexpr ULONGLONG kBubbleLingerMs = 5000;  // bubble text stays this long after the last keystroke
+constexpr size_t kBubbleMaxChars = 12;     // last characters of the current line shown in the bubble
 constexpr int kBubbleFontUnits = 4;
-constexpr ULONGLONG kDotsMs = 10000;       // "..." bubble shown after Enter
+constexpr ULONGLONG kDotsMs = 10000;       // "..." bubble shown after each finished line
 constexpr ULONGLONG kDotsStepMs = 300;     // one more dot lit per step, then none
 constexpr int kHeadTopUnits = 3;           // first sprite row of his hat in a standing cell
 constexpr UINT WM_APP_TRAY = WM_APP + 1;
@@ -63,7 +64,6 @@ constexpr UINT IDM_MOUSESLEEP = 6;
 constexpr UINT IDM_TYPEWITHUSER = 7;
 constexpr UINT IDM_BUBBLE = 8;
 constexpr UINT IDM_SPIDERMAN = 9;
-constexpr UINT IDM_SCRAMBLE = 10;
 constexpr UINT IDM_SCALE = 100;     // + kScales index
 constexpr UINT IDM_SPEED = 200;     // + Speed index
 constexpr UINT IDM_ACTIVITY = 300;  // + Activity index
@@ -74,6 +74,15 @@ constexpr UINT IDM_ZONE = 600;      // + Zone index
 const wchar_t kSettingsKey[] = L"Software\\LemmyPet";
 const wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const wchar_t kRunValue[] = L"LemmyPet";
+const wchar_t kLyricsFile[] = L"lyrics.txt";  // next to the exe: one line per bubble, UTF-8, '#' for comments
+// Built-in lines when there is no lyrics file: Motorhead song titles.
+const wchar_t* const kDefaultLyrics[] = {
+    L"Ace of Spades", L"Overkill", L"Bomber", L"Iron Fist", L"Killed by Death", L"Orgasmatron",
+    L"Born to Raise Hell", L"Rock 'n' Roll", L"Eat the Rich", L"Hellraiser", L"Stay Clean", L"No Class",
+    L"Damage Case", L"Metropolis", L"We Are Mot\u00f6rhead", L"Deaf Forever", L"Built for Speed", L"Sacrifice",
+    L"1916", L"Love Me Forever", L"The Chase Is Better Than the Catch", L"Dancing on Your Grave",
+    L"Stone Dead Forever", L"Mot\u00f6rhead",
+};
 
 struct SpeedPreset {
     const wchar_t* name;
@@ -81,9 +90,9 @@ struct SpeedPreset {
     ULONGLONG walkFrameMs, sleepFrameMs, sulkFrameMs, typeFrameMs, zzzLifeMs;
 };
 const SpeedPreset kSpeeds[] = {
-    {L"Lente", 18.0, 220, 900, 350, 160, 3200},
-    {L"Normale", 30.0, 150, 700, 250, 110, 2400},
-    {L"Rapide", 50.0, 100, 500, 160, 70, 1800},
+    {L"Slow", 18.0, 220, 900, 350, 160, 3200},
+    {L"Normal", 30.0, 150, 700, 250, 110, 2400},
+    {L"Fast", 50.0, 100, 500, 160, 70, 1800},
 };
 
 struct ActivityPreset {
@@ -95,21 +104,21 @@ struct ActivityPreset {
     int chainWalkPct;       // chance to start a new walk right after arriving
 };
 const ActivityPreset kActivities[] = {
-    {L"Paresseux", 2000, 5000, 50, 30, 10, 15000, 40000, 5000, 15000, 20},
+    {L"Lazy", 2000, 5000, 50, 30, 10, 15000, 40000, 5000, 15000, 20},
     {L"Normal", 600, 1500, 80, 8, 7, 10000, 30000, 5000, 12000, 50},
-    {L"Hyperactif", 200, 700, 88, 3, 6, 6000, 15000, 4000, 8000, 75},
+    {L"Hyperactive", 200, 700, 88, 3, 6, 6000, 15000, 4000, 8000, 75},
 };
 
 enum Reaction { kTeleport, kFlee, kIgnore };
-const wchar_t* const kReactionNames[] = {L"Se téléporter en bas à droite",
-                                         L"S'enfuir dans un coin", L"L'ignorer"};
+const wchar_t* const kReactionNames[] = {L"Teleport to bottom-right",
+                                         L"Flee to a corner", L"Ignore it"};
 enum Zone { kAnywhere, kEdges, kBottom };
-const wchar_t* const kZoneNames[] = {L"Partout", L"Bords de l'\u00e9cran", L"Bas de l'\u00e9cran"};
+const wchar_t* const kZoneNames[] = {L"Anywhere", L"Screen edges", L"Bottom of screen"};
 const int kOpacityPct[] = {100, 80, 60, 40, 20};
-const wchar_t* const kOpacityNames[] = {L"100 % (opaque)", L"80 %", L"60 %", L"40 %", L"20 %"};
+const wchar_t* const kOpacityNames[] = {L"100% (opaque)", L"80%", L"60%", L"40%", L"20%"};
 // Integer scales keep pixels crisp; half steps use slightly uneven nearest-neighbor pixels.
 const double kScales[] = {1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0};
-const wchar_t* const kScaleNames[] = {L"x1", L"x1,5", L"x2", L"x2,5", L"x3", L"x4", L"x5", L"x6"};
+const wchar_t* const kScaleNames[] = {L"x1", L"x1.5", L"x2", L"x2.5", L"x3", L"x4", L"x5", L"x6"};
 constexpr int kDefaultScale = 2;  // x2
 
 // lemmy.png is a grid of kCellUnits cells (see tools/make_sheet.py for the row layout).
@@ -146,8 +155,7 @@ struct Settings {
     bool draggable = false;
     bool sleepOnMouseIdle = false;  // sleeps while the mouse does not move
     bool typeWithUser = true;       // types on his laptop while the user types
-    bool keyBubble = true;          // shows the typed keys in a bubble while doing so
-    bool scrambleKeys = false;      // privacy: the bubble shows random characters instead of the typed ones
+    bool keyBubble = true;          // types Lemmy lines in a bubble while doing so (never the real keys)
     int zone = kAnywhere;  // where on the work area he may walk
     bool spiderMan = false;  // edges zone: keeps his feet on the edge he walks on (walls, ceiling)
 };
@@ -210,7 +218,10 @@ struct App {
     int bubbleW = 0, bubbleH = 0;
     POINT bubbleTip{};         // tail tip in the bubble bitmap
     int bubbleSide = 0;        // side its tail is drawn on (see DrawBubble)
-    std::wstring typed;        // last characters typed (memory only, cleared once the user stops)
+    std::vector<std::wstring> lyrics;  // lines typed in the bubble (kLyricsFile or kDefaultLyrics)
+    size_t lyric = 0;          // current line in lyrics
+    size_t lyricPos = 0;       // characters of it typed so far
+    std::wstring typed;        // end of the current line typed so far, shown in the bubble
     std::wstring bubbleText;   // text currently drawn in the bubble bitmap
     int bubbleDots = -1;       // lit dots drawn in the bubble bitmap, -1 when it shows text
     ULONGLONG dotsStart = 0, dotsUntil = 0;  // "..." bubble after Enter (as if waiting for a reply)
@@ -269,7 +280,6 @@ void LoadSettings() {
     g.cfg.sleepOnMouseIdle = ReadDword(L"SleepOnMouseIdle", def.sleepOnMouseIdle) != 0;
     g.cfg.typeWithUser = ReadDword(L"TypeWithUser", def.typeWithUser) != 0;
     g.cfg.keyBubble = ReadDword(L"KeyBubble", def.keyBubble) != 0;
-    g.cfg.scrambleKeys = ReadDword(L"ScrambleKeys", def.scrambleKeys) != 0;
     // Falls back to the former bottom-only toggle.
     const DWORD legacyZone = ReadDword(L"BottomOnly", 0) != 0 ? kBottom : def.zone;
     g.cfg.zone = Clamp(static_cast<int>(ReadDword(L"Zone", legacyZone)), 0, static_cast<int>(kBottom));
@@ -287,7 +297,6 @@ void SaveSettings() {
     WriteDword(L"SleepOnMouseIdle", g.cfg.sleepOnMouseIdle);
     WriteDword(L"TypeWithUser", g.cfg.typeWithUser);
     WriteDword(L"KeyBubble", g.cfg.keyBubble);
-    WriteDword(L"ScrambleKeys", g.cfg.scrambleKeys);
     WriteDword(L"Zone", g.cfg.zone);
     WriteDword(L"SpiderMan", g.cfg.spiderMan);
 }
@@ -648,63 +657,73 @@ void EnterType(ULONGLONG now, ULONGLONG durationMs) {
     g.stateEnd = std::max(g.stateEnd, now + durationMs);
 }
 
-// Character a key produces with the current modifiers in the foreground window's layout, or 0.
-wchar_t KeyChar(int vk) {
-    const auto held = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
-    BYTE state[256] = {};
-    for (int key : {VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU,
-                    VK_RMENU})
-        if (held(key)) state[key] = 0x80;
-    if (GetKeyState(VK_CAPITAL) & 1) state[VK_CAPITAL] = 0x01;
-    // Ctrl or Alt alone means a shortcut; both together is AltGr.
-    if ((state[VK_CONTROL] != 0) != (state[VK_MENU] != 0)) return 0;
-    const HKL layout = GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), nullptr));
-    wchar_t buf[4];
-    // Flag 4: leaves the keyboard state (pending dead keys) untouched.
-    const int n = ToUnicodeEx(vk, MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC, layout), state, buf, ARRAYSIZE(buf), 4,
-                              layout);
-    return n == 1 && buf[0] >= 0x20 ? buf[0] : 0;
+// Loads kLyricsFile from the exe folder, falling back to kDefaultLyrics.
+void LoadLyrics() {
+    wchar_t path[MAX_PATH];
+    const DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (len > 0 && len < MAX_PATH && PathRemoveFileSpecW(path) && PathAppendW(path, kLyricsFile)) {
+        if (FILE* f = _wfopen(path, L"rb")) {
+            std::string data;
+            char buf[4096];
+            for (size_t n; (n = std::fread(buf, 1, sizeof(buf), f)) > 0;) data.append(buf, n);
+            std::fclose(f);
+            if (data.compare(0, 3, "\xEF\xBB\xBF") == 0) data.erase(0, 3);
+            std::wstring text(data.size(), L'\0');
+            text.resize(MultiByteToWideChar(CP_UTF8, 0, data.data(), static_cast<int>(data.size()), text.data(),
+                                            static_cast<int>(text.size())));
+            for (size_t start = 0; start < text.size();) {
+                size_t end = text.find(L'\n', start);
+                if (end == std::wstring::npos) end = text.size();
+                std::wstring line = text.substr(start, end - start);
+                start = end + 1;
+                const size_t first = line.find_first_not_of(L" \t\r"), last = line.find_last_not_of(L" \t\r");
+                if (first == std::wstring::npos || line[first] == L'#') continue;
+                g.lyrics.push_back(line.substr(first, last - first + 1));
+            }
+        }
+    }
+    if (g.lyrics.empty()) g.lyrics.assign(std::begin(kDefaultLyrics), std::end(kDefaultLyrics));
 }
 
-// Keeps the end of what the user types for the bubble; Enter starts over, showing "..." for a while.
-void RecordTypedKey(int vk) {
-    if (vk == VK_RETURN) {
+// Starts a random line, other than the current one when possible.
+void NextLyric() {
+    const int count = static_cast<int>(g.lyrics.size());
+    g.lyric = (g.lyric + RandRange(count > 1 ? 1 : 0, count - 1)) % count;
+    g.lyricPos = 0;
+}
+
+// Every keystroke types the next character of the current line, whatever the key: what the user
+// types is never read. A finished line gives way to "..." for a while, then to the next one.
+void RecordKeystroke(ULONGLONG now) {
+    if (now - g.lastKeystroke > kBubbleLingerMs) {  // the bubble has faded: start afresh
         g.typed.clear();
-        g.dotsStart = GetTickCount64();
-        g.dotsUntil = g.dotsStart + kDotsMs;
+        NextLyric();
+    }
+    const std::wstring& line = g.lyrics[g.lyric];
+    if (g.lyricPos >= line.size()) {
+        g.typed.clear();
+        g.dotsStart = now;
+        g.dotsUntil = now + kDotsMs;
+        NextLyric();
         return;
     }
     g.dotsUntil = 0;
-    if (vk == VK_BACK) {
-        if (!g.typed.empty()) g.typed.pop_back();
-        return;
-    }
-    // Scrambled: the key is never translated, so nothing typed reaches memory.
-    static const wchar_t kScramble[] = L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const wchar_t ch = g.cfg.scrambleKeys ? kScramble[RandRange(0, ARRAYSIZE(kScramble) - 2)] : KeyChar(vk);
-    if (!ch) return;
-    g.typed += ch;
+    g.typed += line[g.lyricPos++];
     if (g.typed.size() > kBubbleMaxChars) g.typed.erase(0, g.typed.size() - kBubbleMaxChars);
 }
 
-bool IsTypingKey(int vk) {
-    return (vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z') || (vk >= VK_NUMPAD0 && vk <= VK_DIVIDE) ||
-           vk == VK_SPACE || vk == VK_BACK || vk == VK_RETURN || (vk >= VK_OEM_1 && vk <= VK_OEM_3) ||
-           (vk >= VK_OEM_4 && vk <= VK_OEM_8) || vk == VK_OEM_102;
-}
-
 // Mirrors the user typing: a burst of keystrokes opens the laptop, each further one keeps it open.
-void OnKeystroke(int vk) {
+void OnKeystroke() {
     const ULONGLONG now = GetTickCount64();
-    if (g.cfg.keyBubble) RecordTypedKey(vk);
+    if (g.cfg.keyBubble) RecordKeystroke(now);
     const bool burst = now - g.lastKeystroke <= kTypeBurstMs;
     g.lastKeystroke = now;
     if (g.state == State::Type ||
         (burst && (g.state == State::Idle || g.state == State::Walk || g.state == State::Sleep)))
         EnterType(now, kTypeLingerMs);
-    // He stays at the laptop while the bubble shows the typed text.
+    // He stays at the laptop while the bubble shows text.
     if (g.state == State::Type && !g.typed.empty()) EnterType(now, kBubbleLingerMs);
-    // After Enter he stays at the laptop while the "..." bubble lasts.
+    // After a finished line he stays at the laptop while the "..." bubble lasts.
     if (g.state == State::Type && g.dotsUntil > now) EnterType(now, g.dotsUntil - now);
 }
 
@@ -716,27 +735,18 @@ void UpdateKeyboardListener() {
     if (!on) std::fill(std::begin(g.keyDown), std::end(g.keyDown), false);
 }
 
-// Detects key-down edges on typing keys (auto-repeat ignored).
+// Detects key-down edges on any key, modifiers included (auto-repeat ignored).
 void OnRawInput(HRAWINPUT handle) {
     RAWINPUT ri;
     UINT size = sizeof(ri);
     if (GetRawInputData(handle, RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1) ||
         ri.header.dwType != RIM_TYPEKEYBOARD)
         return;
-    int vk = ri.data.keyboard.VKey;
+    const int vk = ri.data.keyboard.VKey;
     const USHORT flags = ri.data.keyboard.Flags;
     if (vk <= 0 || vk >= 255) return;  // 255: part of an escaped sequence
-    // Raw input ignores Num Lock: numpad keys come as navigation keys without the E0 prefix.
-    if (!(flags & RI_KEY_E0) && (GetKeyState(VK_NUMLOCK) & 1)) {
-        static const BYTE kNumpad[][2] = {{VK_INSERT, VK_NUMPAD0}, {VK_END, VK_NUMPAD1},  {VK_DOWN, VK_NUMPAD2},
-                                          {VK_NEXT, VK_NUMPAD3},   {VK_LEFT, VK_NUMPAD4}, {VK_CLEAR, VK_NUMPAD5},
-                                          {VK_RIGHT, VK_NUMPAD6},  {VK_HOME, VK_NUMPAD7}, {VK_UP, VK_NUMPAD8},
-                                          {VK_PRIOR, VK_NUMPAD9},  {VK_DELETE, VK_DECIMAL}};
-        for (const auto& m : kNumpad)
-            if (vk == m[0]) vk = m[1];
-    }
     const bool down = !(flags & RI_KEY_BREAK);
-    if (down && !g.keyDown[vk] && g.visible && g.cfg.typeWithUser && IsTypingKey(vk)) OnKeystroke(vk);
+    if (down && !g.keyDown[vk] && g.visible && g.cfg.typeWithUser) OnKeystroke();
     g.keyDown[vk] = down;
 }
 
@@ -899,7 +909,7 @@ void NextState(ULONGLONG now) {
     else EnterIdle(now);
 }
 
-// --- Typed-keys bubble ---------------------------------------------------
+// --- Lyrics bubble -------------------------------------------------------
 
 // Draws a pixel-art speech bubble around text or, when dots >= 0, three dots of which the first `dots`
 // are lit. Its tail points toward his head, on the side matching Orientation(): 0 bottom (left end),
@@ -973,7 +983,7 @@ void HideBubble() {
     g.bubbleShown = false;
 }
 
-// Shows what the user types in a bubble above his head while he types along, then "..." after Enter.
+// Shows the line he is typing in a bubble above his head, then "..." once it is finished.
 void UpdateBubble(ULONGLONG now) {
     if (!g.typed.empty() && now - g.lastKeystroke > kBubbleLingerMs) g.typed.clear();
     const bool waiting = g.typed.empty() && now < g.dotsUntil;
@@ -1223,34 +1233,30 @@ void ShowTrayMenu() {
     for (size_t i = 0; i < ARRAYSIZE(kActivities); ++i) activityNames[i] = kActivities[i].name;
 
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, IDM_TOGGLE, g.visible ? L"Cacher" : L"Afficher");
+    AppendMenuW(menu, MF_STRING, IDM_TOGGLE, g.visible ? L"Hide" : L"Show");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendRadioMenu(menu, L"Taille", IDM_SCALE, kScaleNames, ARRAYSIZE(kScales), g.cfg.scale);
-    AppendRadioMenu(menu, L"Vitesse", IDM_SPEED, speedNames, ARRAYSIZE(kSpeeds), g.cfg.speed);
-    AppendRadioMenu(menu, L"Activité", IDM_ACTIVITY, activityNames, ARRAYSIZE(kActivities), g.cfg.activity);
-    AppendRadioMenu(menu, L"Quand la souris approche", IDM_REACTION, kReactionNames, ARRAYSIZE(kReactionNames),
+    AppendRadioMenu(menu, L"Size", IDM_SCALE, kScaleNames, ARRAYSIZE(kScales), g.cfg.scale);
+    AppendRadioMenu(menu, L"Speed", IDM_SPEED, speedNames, ARRAYSIZE(kSpeeds), g.cfg.speed);
+    AppendRadioMenu(menu, L"Activity", IDM_ACTIVITY, activityNames, ARRAYSIZE(kActivities), g.cfg.activity);
+    AppendRadioMenu(menu, L"When the mouse approaches", IDM_REACTION, kReactionNames, ARRAYSIZE(kReactionNames),
                     g.cfg.reaction);
-    AppendRadioMenu(menu, L"Opacit\u00e9", IDM_OPACITY, kOpacityNames, ARRAYSIZE(kOpacityNames), g.cfg.opacity);
-    AppendRadioMenu(menu, L"Zone de d\u00e9placement", IDM_ZONE, kZoneNames, ARRAYSIZE(kZoneNames), g.cfg.zone);
-    AppendMenuW(menu, MF_STRING | (g.cfg.zzz ? MF_CHECKED : 0), IDM_ZZZ, L"Zzz quand il dort");
+    AppendRadioMenu(menu, L"Opacity", IDM_OPACITY, kOpacityNames, ARRAYSIZE(kOpacityNames), g.cfg.opacity);
+    AppendRadioMenu(menu, L"Roaming zone", IDM_ZONE, kZoneNames, ARRAYSIZE(kZoneNames), g.cfg.zone);
+    AppendMenuW(menu, MF_STRING | (g.cfg.zzz ? MF_CHECKED : 0), IDM_ZZZ, L"Zzz while sleeping");
     AppendMenuW(menu, MF_STRING | (g.cfg.draggable ? MF_CHECKED : 0), IDM_DRAG,
-                L"D\u00e9pla\u00e7able \u00e0 la souris");
+                L"Draggable with the mouse");
     AppendMenuW(menu, MF_STRING | (g.cfg.sleepOnMouseIdle ? MF_CHECKED : 0), IDM_MOUSESLEEP,
-                L"Dort quand la souris ne bouge plus");
+                L"Sleep when the mouse is idle");
     AppendMenuW(menu, MF_STRING | (g.cfg.typeWithUser ? MF_CHECKED : 0), IDM_TYPEWITHUSER,
-                L"Tape sur son portable quand j'\u00e9cris");
+                L"Type on his laptop when I type");
     AppendMenuW(menu, MF_STRING | (g.cfg.keyBubble ? MF_CHECKED : 0) | (g.cfg.typeWithUser ? 0 : MF_GRAYED),
-                IDM_BUBBLE, L"Bulle avec les touches tap\u00e9es");
-    AppendMenuW(menu,
-                MF_STRING | (g.cfg.scrambleKeys ? MF_CHECKED : 0) |
-                    (g.cfg.typeWithUser && g.cfg.keyBubble ? 0 : MF_GRAYED),
-                IDM_SCRAMBLE, L"Touches al\u00e9atoires dans la bulle (confidentialit\u00e9)");
+                IDM_BUBBLE, L"Bubble with Lemmy lyrics");
     AppendMenuW(menu, MF_STRING | (g.cfg.spiderMan ? MF_CHECKED : 0) | (g.cfg.zone == kEdges ? 0 : MF_GRAYED),
-                IDM_SPIDERMAN, L"Mode Spider-Man (pieds sur les bords)");
+                IDM_SPIDERMAN, L"Spider-Man mode (feet on the edges)");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING | (StartupEnabled() ? MF_CHECKED : 0), IDM_STARTUP, L"Lancer au démarrage");
+    AppendMenuW(menu, MF_STRING | (StartupEnabled() ? MF_CHECKED : 0), IDM_STARTUP, L"Run at startup");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, IDM_QUIT, L"Quitter");
+    AppendMenuW(menu, MF_STRING, IDM_QUIT, L"Quit");
 
     POINT pt;
     GetCursorPos(&pt);
@@ -1281,9 +1287,6 @@ void ShowTrayMenu() {
         g.cfg.spiderMan = !g.cfg.spiderMan;
     } else if (cmd == IDM_BUBBLE) {
         g.cfg.keyBubble = !g.cfg.keyBubble;
-        g.typed.clear();
-    } else if (cmd == IDM_SCRAMBLE) {
-        g.cfg.scrambleKeys = !g.cfg.scrambleKeys;
         g.typed.clear();
     } else if (cmd >= IDM_SCALE && cmd < IDM_SCALE + ARRAYSIZE(kScales)) {
         ApplyScale(static_cast<int>(cmd - IDM_SCALE));
@@ -1376,6 +1379,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
     std::srand(GetTickCount());
     LoadSettings();
+    LoadLyrics();
     if (StartupEnabled()) SetStartup(true);  // keep the path current if the exe moved
 
     if (!LoadSheet(g.sheet, IDR_SPRITES) || !BuildScaledAssets()) {
