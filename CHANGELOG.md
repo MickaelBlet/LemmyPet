@@ -25,3 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Tray menu translated from French to English.
+
+### Fixed
+
+- Multi-monitor: Lemmy only moves to an adjacent screen, walking through
+  the shared border (along the floors in the bottom and edges zones)
+  instead of cutting straight across gaps and other screens.

@@ -38,6 +38,7 @@ constexpr ULONGLONG kTopmostMs = 2000;
 constexpr ULONGLONG kBumpMs = 900;       // dazed after walking into a screen edge
 constexpr ULONGLONG kBumpShakeMs = 350;
 constexpr int kBumpChancePct = 50;       // chance a walk cut short by an edge ends in a bump
+constexpr int kCrossChancePct = 15;      // chance a walk heads to a neighboring screen
 constexpr double kBumpKnockUnits = 8.0;  // knockback distance
 constexpr ULONGLONG kMouseIdleMs = 30000;  // cursor stillness before he falls asleep (if enabled)
 constexpr ULONGLONG kDragLeanMs = 150;   // drag lean resets after this long without movement
@@ -162,6 +163,11 @@ struct Settings {
 
 enum class State { Idle, Walk, Sleep, Flee, Sulk, Drag, Bump, Type };
 
+struct Waypoint {
+    int x, y;
+    int orient;  // Orientation() forced on the way there, or -1
+};
+
 struct App {
     HWND pet = nullptr;
     HWND tray = nullptr;
@@ -187,6 +193,8 @@ struct App {
 
     double x = 0, y = 0;    // sprite cell top-left (the window extends by padX/padTop)
     double tx = 0, ty = 0;  // walk target
+    int legOrient = -1;     // Orientation() forced while walking to (tx, ty), or -1
+    std::vector<Waypoint> path;  // targets after the current one (crossing to another screen)
     int dir = 0;            // direction, index in kDirView
     State state = State::Idle;
     ULONGLONG stateEnd = 0;
@@ -561,26 +569,29 @@ void Render(Frame frame, ULONGLONG now) {
 
 // --- Behavior -------------------------------------------------------------
 
-BOOL CALLBACK CollectWorkArea(HMONITOR mon, HDC, LPRECT, LPARAM param) {
+BOOL CALLBACK CollectMonitor(HMONITOR mon, HDC, LPRECT, LPARAM param) {
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
-    if (GetMonitorInfoW(mon, &mi)) reinterpret_cast<std::vector<RECT>*>(param)->push_back(mi.rcWork);
+    if (GetMonitorInfoW(mon, &mi)) reinterpret_cast<std::vector<MONITORINFO>*>(param)->push_back(mi);
     return TRUE;
 }
 
-RECT CurrentWorkArea() {
+MONITORINFO CurrentMonitor() {
     const RECT petRc{static_cast<LONG>(g.x), static_cast<LONG>(g.y),
                      static_cast<LONG>(g.x) + g.cellW, static_cast<LONG>(g.y) + g.cellH};
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(MonitorFromRect(&petRc, MONITOR_DEFAULTTONEAREST), &mi);
-    return mi.rcWork;
+    return mi;
 }
+
+RECT CurrentWorkArea() { return CurrentMonitor().rcWork; }
 
 // Spider-Man mode: the edge his feet stick to (see BlitCanvas). Bottom corners count as floor,
 // top corners as walls; anywhere off an edge he stands upright.
 int Orientation() {
     if (!g.cfg.spiderMan || g.cfg.zone != kEdges || g.state == State::Drag) return 0;
+    if (g.state == State::Walk && g.legOrient >= 0) return g.legOrient;
     const RECT area = CurrentWorkArea();
     if (g.y >= area.bottom - g.cellH) return 0;
     if (g.x <= area.left) return 1;
@@ -592,13 +603,6 @@ int Orientation() {
 // g.dir is a screen direction; these convert to and from the sprite row shown once rotated.
 int ViewDir() { return (g.dir + 8 - 2 * Orientation()) % 8; }
 int ToScreenDir(int viewDir) { return (viewDir + 2 * Orientation()) % 8; }
-
-RECT PickWorkArea() {
-    std::vector<RECT> areas;
-    EnumDisplayMonitors(nullptr, nullptr, CollectWorkArea, reinterpret_cast<LPARAM>(&areas));
-    if (areas.size() > 1 && RandRange(0, 99) < 15) return areas[RandRange(0, static_cast<int>(areas.size()) - 1)];
-    return CurrentWorkArea();
-}
 
 // Maps a screen-space vector to a direction index (see kDirView).
 int DirTowards(double dx, double dy) {
@@ -750,8 +754,68 @@ void OnRawInput(HRAWINPUT handle) {
     g.keyDown[vk] = down;
 }
 
-// Edges zone: walks along the edge he is on (a random one in a corner), or to a random edge point of
-// another work area. Returns true when instead heading straight to the nearest edge (e.g. after a drag).
+// Plans a walk onto a random screen next to the current one, through their shared border, so he never
+// cuts across the void between screens. In the bottom and edges zones he walks along the floors (from
+// the floor only), climbing or dropping at the border when they differ. Returns false when there is
+// no such screen.
+bool PlanCrossing() {
+    std::vector<MONITORINFO> monitors;
+    EnumDisplayMonitors(nullptr, nullptr, CollectMonitor, reinterpret_cast<LPARAM>(&monitors));
+    const MONITORINFO cur = CurrentMonitor();
+    const RECT& a = cur.rcWork;
+    const bool onFloor = g.cfg.zone != kAnywhere;
+    if (onFloor && std::fabs(g.y - (a.bottom - g.cellH)) > 0.5) return false;
+    std::vector<std::vector<Waypoint>> options;
+    for (const MONITORINFO& m : monitors) {
+        const RECT& b = m.rcWork;
+        const RECT& ma = cur.rcMonitor;
+        const RECT& mb = m.rcMonitor;
+        const int side = mb.left == ma.right ? 1 : (mb.right == ma.left ? -1 : 0);
+        const int vside = mb.top == ma.bottom ? 1 : (mb.bottom == ma.top ? -1 : 0);
+        if (side != 0) {
+            // Crosses at a height where he fits on both sides; along the floors, the higher one.
+            const int lo = std::max(a.top, b.top), hi = std::min(a.bottom, b.bottom) - g.cellH;
+            if (hi < lo) continue;
+            const int fromX = side > 0 ? a.right - g.cellW : a.left, toX = side > 0 ? b.left : b.right - g.cellW;
+            const int floorA = a.bottom - g.cellH, floorB = b.bottom - g.cellH;
+            const int lane = onFloor ? hi : Clamp(static_cast<int>(g.y), lo, hi);
+            const Waypoint end{RandRange(b.left, b.right - g.cellW), onFloor ? floorB : RandRange(b.top, floorB), -1};
+            // Standing on the floor while stepping over the border, whichever screen he counts as on.
+            options.push_back({{fromX, onFloor ? floorA : lane, -1}, {fromX, lane, -1}, {toX, lane, 0},
+                               {toX, onFloor ? floorB : lane, -1}, end});
+        } else if (vside != 0 && !onFloor) {
+            const int lo = std::max(a.left, b.left), hi = std::min(a.right, b.right) - g.cellW;
+            if (hi < lo) continue;
+            const int lane = Clamp(static_cast<int>(g.x), lo, hi);
+            const int fromY = vside > 0 ? a.bottom - g.cellH : a.top, toY = vside > 0 ? b.top : b.bottom - g.cellH;
+            const Waypoint end{RandRange(b.left, b.right - g.cellW), RandRange(b.top, b.bottom - g.cellH), -1};
+            options.push_back({{lane, fromY, -1}, {lane, toY, -1}, end});
+        }
+    }
+    if (options.empty()) return false;
+    g.path.clear();
+    POINT last{std::lround(g.x), std::lround(g.y)};
+    for (const Waypoint& p : options[RandRange(0, static_cast<int>(options.size()) - 1)]) {
+        if (p.x != last.x || p.y != last.y) g.path.push_back(p);
+        last = {p.x, p.y};
+    }
+    if (g.path.empty()) return false;
+    g.bumpOnArrival = false;
+    g.turnAxis = -1;
+    return true;
+}
+
+// Heads to the next point of g.path.
+void NextWaypoint() {
+    g.tx = g.path.front().x;
+    g.ty = g.path.front().y;
+    g.legOrient = g.path.front().orient;
+    g.path.erase(g.path.begin());
+    g.dir = DirTowards(g.tx - g.x, g.ty - g.y);
+}
+
+// Edges zone: walks along the edge he is on (a random one in a corner), or to a random edge point when
+// off the work area. Returns true when instead heading straight to the nearest edge (e.g. after a drag).
 bool PickEdgeTarget(int minX, int maxX, int minY, int maxY, int range) {
     const int x = static_cast<int>(g.x), y = static_cast<int>(g.y);
     const int turnAxis = g.turnAxis;
@@ -789,7 +853,14 @@ bool PickEdgeTarget(int minX, int maxX, int minY, int maxY, int range) {
 }
 
 void EnterWalk(ULONGLONG now) {
-    const RECT area = PickWorkArea();
+    g.path.clear();
+    g.legOrient = -1;
+    if (RandRange(0, 99) < kCrossChancePct && PlanCrossing()) {
+        NextWaypoint();
+        g.state = State::Walk;
+        return;
+    }
+    const RECT area = CurrentWorkArea();
     const int range = static_cast<int>(kWalkRangeUnits * Scale());
     const int minX = area.left, maxX = area.right - g.cellW;
     const int maxY = area.bottom - g.cellH, minY = g.cfg.zone == kBottom ? maxY : area.top;
@@ -1076,7 +1147,8 @@ void Tick() {
     switch (g.state) {
     case State::Walk:
         if (MoveToTarget(walkSpeed * dt)) {
-            if (g.bumpOnArrival) EnterBump(now, false);
+            if (!g.path.empty()) NextWaypoint();
+            else if (g.bumpOnArrival) EnterBump(now, false);
             else if (!MouseIdle(now) && RandRange(0, 99) < Activity().chainWalkPct) EnterWalk(now);
             else EnterIdle(now);
         }
