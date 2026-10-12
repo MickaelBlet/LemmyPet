@@ -1,0 +1,6 @@
+#include <windows.h>
+#include "resource.h"
+
+IDI_APP ICON "app.ico"
+IDR_SPRITES RCDATA "../lemmy.png"
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
