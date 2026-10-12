@@ -1,7 +1,7 @@
 # LemmyPet
 Lemmy 🤘
 
-![LemmyPet demo](demo.gif)
+<p align="center"><img src="demo.gif" alt="LemmyPet demo"></p>
 
 A tiny pixel-art Lemmy that lives on your Windows desktop. He wanders around,
 naps, sulks when the mouse gets too close and types on his laptop while you type.
