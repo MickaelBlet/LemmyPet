@@ -63,6 +63,7 @@ constexpr UINT IDM_MOUSESLEEP = 6;
 constexpr UINT IDM_TYPEWITHUSER = 7;
 constexpr UINT IDM_BUBBLE = 8;
 constexpr UINT IDM_SPIDERMAN = 9;
+constexpr UINT IDM_SCRAMBLE = 10;
 constexpr UINT IDM_SCALE = 100;     // + kScales index
 constexpr UINT IDM_SPEED = 200;     // + Speed index
 constexpr UINT IDM_ACTIVITY = 300;  // + Activity index
@@ -146,6 +147,7 @@ struct Settings {
     bool sleepOnMouseIdle = false;  // sleeps while the mouse does not move
     bool typeWithUser = true;       // types on his laptop while the user types
     bool keyBubble = true;          // shows the typed keys in a bubble while doing so
+    bool scrambleKeys = false;      // privacy: the bubble shows random characters instead of the typed ones
     int zone = kAnywhere;  // where on the work area he may walk
     bool spiderMan = false;  // edges zone: keeps his feet on the edge he walks on (walls, ceiling)
 };
@@ -267,6 +269,7 @@ void LoadSettings() {
     g.cfg.sleepOnMouseIdle = ReadDword(L"SleepOnMouseIdle", def.sleepOnMouseIdle) != 0;
     g.cfg.typeWithUser = ReadDword(L"TypeWithUser", def.typeWithUser) != 0;
     g.cfg.keyBubble = ReadDword(L"KeyBubble", def.keyBubble) != 0;
+    g.cfg.scrambleKeys = ReadDword(L"ScrambleKeys", def.scrambleKeys) != 0;
     // Falls back to the former bottom-only toggle.
     const DWORD legacyZone = ReadDword(L"BottomOnly", 0) != 0 ? kBottom : def.zone;
     g.cfg.zone = Clamp(static_cast<int>(ReadDword(L"Zone", legacyZone)), 0, static_cast<int>(kBottom));
@@ -284,6 +287,7 @@ void SaveSettings() {
     WriteDword(L"SleepOnMouseIdle", g.cfg.sleepOnMouseIdle);
     WriteDword(L"TypeWithUser", g.cfg.typeWithUser);
     WriteDword(L"KeyBubble", g.cfg.keyBubble);
+    WriteDword(L"ScrambleKeys", g.cfg.scrambleKeys);
     WriteDword(L"Zone", g.cfg.zone);
     WriteDword(L"SpiderMan", g.cfg.spiderMan);
 }
@@ -675,7 +679,9 @@ void RecordTypedKey(int vk) {
         if (!g.typed.empty()) g.typed.pop_back();
         return;
     }
-    const wchar_t ch = KeyChar(vk);
+    // Scrambled: the key is never translated, so nothing typed reaches memory.
+    static const wchar_t kScramble[] = L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const wchar_t ch = g.cfg.scrambleKeys ? kScramble[RandRange(0, ARRAYSIZE(kScramble) - 2)] : KeyChar(vk);
     if (!ch) return;
     g.typed += ch;
     if (g.typed.size() > kBubbleMaxChars) g.typed.erase(0, g.typed.size() - kBubbleMaxChars);
@@ -1235,6 +1241,10 @@ void ShowTrayMenu() {
                 L"Tape sur son portable quand j'\u00e9cris");
     AppendMenuW(menu, MF_STRING | (g.cfg.keyBubble ? MF_CHECKED : 0) | (g.cfg.typeWithUser ? 0 : MF_GRAYED),
                 IDM_BUBBLE, L"Bulle avec les touches tap\u00e9es");
+    AppendMenuW(menu,
+                MF_STRING | (g.cfg.scrambleKeys ? MF_CHECKED : 0) |
+                    (g.cfg.typeWithUser && g.cfg.keyBubble ? 0 : MF_GRAYED),
+                IDM_SCRAMBLE, L"Touches al\u00e9atoires dans la bulle (confidentialit\u00e9)");
     AppendMenuW(menu, MF_STRING | (g.cfg.spiderMan ? MF_CHECKED : 0) | (g.cfg.zone == kEdges ? 0 : MF_GRAYED),
                 IDM_SPIDERMAN, L"Mode Spider-Man (pieds sur les bords)");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -1271,6 +1281,9 @@ void ShowTrayMenu() {
         g.cfg.spiderMan = !g.cfg.spiderMan;
     } else if (cmd == IDM_BUBBLE) {
         g.cfg.keyBubble = !g.cfg.keyBubble;
+        g.typed.clear();
+    } else if (cmd == IDM_SCRAMBLE) {
+        g.cfg.scrambleKeys = !g.cfg.scrambleKeys;
         g.typed.clear();
     } else if (cmd >= IDM_SCALE && cmd < IDM_SCALE + ARRAYSIZE(kScales)) {
         ApplyScale(static_cast<int>(cmd - IDM_SCALE));
