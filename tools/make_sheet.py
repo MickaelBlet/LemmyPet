@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Build lemmy.png, the sprite sheet used by LemmyPet, from the images in sprites/.
+"""Build pets/lemmy/lemmy.png, Lemmy's sprite sheet, from the images in sprites/.
 
 The source images are upscaled pixel art (~10 px per art pixel). They are reduced to
 their native resolution, then every animation frame is derived from them. All frames
 share one CELL x CELL cell, the character anchored bottom-center one pixel above the
-bottom, leaving room for the white halo drawn around every frame.
+bottom, leaving room for the white halo LemmyPet draws around every frame.
 
-Sheet rows (keep in sync with main.cpp):
+Sheet rows (keep in sync with pets/lemmy/pet.ini):
   0-3   walk, one row per view (front, left, back, right), 3 frames (1 = standing)
   4-7   sulk, same views, 2 frames
   8     hurt, one frame per view
@@ -23,8 +23,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 SPRITES = ROOT / "sprites"
-CELL = 45  # kCellUnits in main.cpp
-HALO = (255, 255, 255, 77)  # 70 % transparent
+CELL = 45  # cell in pets/lemmy/pet.ini
 FRONT, LEFT, BACK, RIGHT = range(4)
 
 CLEAR = (0, 0, 0, 0)
@@ -301,18 +300,6 @@ def typing_frames(sprite, view, ink, skin_colors, logo):
     return frames
 
 
-def add_halo(f):
-    """Surrounds every opaque pixel with a 1 px white outline (8-neighborhood)."""
-    src = f.img.copy().load()
-    for y in range(CELL):
-        for x in range(CELL):
-            if src[x, y][3]:
-                continue
-            if any(src[x + dx, y + dy][3] for dy in (-1, 0, 1) for dx in (-1, 0, 1)
-                   if 0 <= x + dx < CELL and 0 <= y + dy < CELL):
-                f.px[x, y] = HALO
-
-
 # --- Assembly ---------------------------------------------------------------
 
 def main():
@@ -343,9 +330,8 @@ def main():
     sheet = Image.new("RGBA", (CELL * 4, CELL * len(rows)), CLEAR)
     for r, frames in enumerate(rows):
         for c, f in enumerate(frames):
-            add_halo(f)
             sheet.paste(f.img, (c * CELL, r * CELL))
-    sheet.save(ROOT / "lemmy.png")
+    sheet.save(ROOT / "pets" / "lemmy" / "lemmy.png")
     if "--preview" in sys.argv:
         preview = Image.new("RGBA", sheet.size, (96, 128, 160, 255))
         preview.alpha_composite(sheet)

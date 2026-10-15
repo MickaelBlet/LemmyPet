@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build demo.gif, the animated preview shown in README.md, from lemmy.png.
+"""Build demo.gif, the animated preview shown in README.md, from pets/lemmy/lemmy.png.
 
 Lemmy walks in, types on his laptop, sulks, walks back and falls asleep.
 Sheet rows are documented in make_sheet.py.
@@ -8,10 +8,10 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-CELL = 45   # kCellUnits in main.cpp
+CELL = 45   # cell in pets/lemmy/pet.ini
 SCALE = 3
 W, H = 480, CELL * SCALE + 6
-TRANSPARENT = 255  # palette index reserved for the transparent background
+TRANSPARENT = 0  # palette index reserved for the transparent background
 FRAME_MS = 90
 
 WALK_FRONT, WALK_LEFT, WALK_BACK, WALK_RIGHT = 0, 1, 2, 3
@@ -20,7 +20,14 @@ SLEEP = 9
 TYPE_FRONT = 10
 WALK_CYCLE = (0, 1, 2, 1)
 
-sheet = Image.open(ROOT / "lemmy.png").convert("RGBA")
+sheet = Image.open(ROOT / "pets" / "lemmy" / "lemmy.png").convert("RGBA")
+# One exact palette shared by every frame (the sheet has well under 255 colors), so no
+# per-frame quantization can shift or dither a color.
+COLORS = sorted({p[:3] for p in sheet.get_flattened_data() if p[3] >= 128})
+INDEX = {c: i + 1 for i, c in enumerate(COLORS)}
+KEY = (255, 0, 255)  # transparent entry; must not be a sprite color or the GIF encoder merges them
+assert KEY not in INDEX
+PALETTE = list(KEY) + [v for c in COLORS for v in c]
 
 
 def cell(col, row):
@@ -31,9 +38,9 @@ def cell(col, row):
 def scene(col, row, x):
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     img.alpha_composite(cell(col, row), (x, H - CELL * SCALE - 3))
-    frame = img.convert("RGB").quantize(TRANSPARENT)
-    frame.putpalette(frame.getpalette()[:TRANSPARENT * 3] + [0, 0, 0] * (256 - TRANSPARENT))
-    frame.paste(TRANSPARENT, mask=img.getchannel("A").point(lambda a: 255 if a < 128 else 0))
+    frame = Image.new("P", (W, H), TRANSPARENT)
+    frame.putpalette(PALETTE)
+    frame.putdata([INDEX[p[:3]] if p[3] >= 128 else TRANSPARENT for p in img.get_flattened_data()])
     return frame
 
 
