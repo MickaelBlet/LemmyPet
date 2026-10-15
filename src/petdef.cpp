@@ -6,16 +6,19 @@
 #include <gdiplus.h>
 
 #include <algorithm>
+#include <climits>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <cwctype>
 #include <iterator>
 #include <map>
+#include <utility>
 
 namespace {
 
 const wchar_t* const kFacingNames[kFacingCount] = {L"S", L"SW", L"W", L"NW", L"N", L"NE", L"E", L"SE"};
-const wchar_t* const kAnimNames[kAnimCount] = {L"walk", L"sulk", L"hurt", L"sleep", L"type"};
+const wchar_t* const kAnimNames[kAnimCount] = {L"walk", L"idle", L"sulk", L"hurt", L"sleep", L"type", L"play", L"turn"};
 
 struct LoadError {
     std::wstring what;
@@ -126,6 +129,68 @@ std::vector<std::wstring> Words(const std::wstring& s) {
     }
 }
 
+// --- AnimData.xml (PMDCollab SpriteCollab) -------------------------------
+
+struct PmdAnim {
+    std::wstring name;            // as written, names its <name>-Anim.png sheet
+    std::wstring copyOf;          // lowercase name of the animation it reuses, if any
+    int w = 0, h = 0;             // frame size
+    std::vector<int> durations;   // per frame, in 1/60 s
+};
+using PmdData = std::map<std::wstring, PmdAnim>;  // by lowercase name
+
+// Text of the first <tag>...</tag> in [from, to), with `from` moved past it; false if none.
+bool NextTag(const std::wstring& xml, const std::wstring& tag, size_t& from, size_t to, std::wstring& text) {
+    const std::wstring open = L"<" + tag + L">", close = L"</" + tag + L">";
+    const size_t start = xml.find(open, from);
+    if (start == std::wstring::npos || start >= to) return false;
+    const size_t end = xml.find(close, start);
+    if (end == std::wstring::npos || end > to) throw LoadError{L"AnimData.xml: unclosed <" + tag + L">"};
+    text = Trim(xml.substr(start + open.size(), end - start - open.size()));
+    from = end + close.size();
+    return true;
+}
+
+// The <Anim> entries of an AnimData.xml.
+PmdData ParseAnimData(const std::vector<std::wstring>& lines) {
+    std::wstring xml;
+    for (const std::wstring& line : lines) xml += line + L"\n";
+    PmdData data;
+    std::wstring block, text;
+    for (size_t pos = 0; NextTag(xml, L"Anim", pos, xml.size(), block);) {
+        PmdAnim a;
+        size_t at = 0;
+        if (!NextTag(block, L"Name", at, block.size(), a.name)) throw LoadError{L"AnimData.xml: <Anim> without <Name>"};
+        const std::wstring what = L"AnimData.xml " + a.name;
+        at = 0;
+        if (NextTag(block, L"CopyOf", at, block.size(), text)) {
+            a.copyOf = Lower(text);
+        } else {
+            at = 0;
+            if (NextTag(block, L"FrameWidth", at, block.size(), text)) a.w = Ints(text, what)[0];
+            at = 0;
+            if (NextTag(block, L"FrameHeight", at, block.size(), text)) a.h = Ints(text, what)[0];
+            if (a.w <= 0 || a.h <= 0) throw LoadError{what + L": no frame size"};
+            for (at = 0; NextTag(block, L"Duration", at, block.size(), text);)
+                a.durations.push_back(std::max(1, Ints(text, what)[0]));
+        }
+        data[Lower(a.name)] = a;
+    }
+    return data;
+}
+
+// Animation `name`, following CopyOf.
+const PmdAnim& FindPmd(const PmdData& data, const std::wstring& name, const std::wstring& where) {
+    std::wstring key = Lower(name);
+    for (size_t hops = 0; hops <= data.size(); ++hops) {
+        const auto it = data.find(key);
+        if (it == data.end()) throw LoadError{where + L": no animation \"" + name + L"\" in AnimData.xml"};
+        if (it->second.copyOf.empty()) return it->second;
+        key = it->second.copyOf;
+    }
+    throw LoadError{where + L": CopyOf loop in AnimData.xml"};
+}
+
 // --- Sheets ---------------------------------------------------------------
 
 template <typename F>
@@ -222,6 +287,7 @@ void Measure(Sprite& s) {
 std::vector<Sprite> Mirrored(std::vector<Sprite> frames) {
     for (Sprite& s : frames) {
         s.mirror = !s.mirror;
+        s.dx = -s.dx;
         std::swap(s.left, s.right);
     }
     return frames;
@@ -239,6 +305,83 @@ void FillFacings(Animation& anim) {
         for (int i = 0; i < static_cast<int>(std::size(tries)) && anim.frames[f].empty(); ++i)
             if (!given[tries[i]].empty()) anim.frames[f] = i == 1 || i == 2 ? Mirrored(given[tries[i]]) : given[tries[i]];
         for (int t = 0; t < kFacingCount && anim.frames[f].empty(); ++t) anim.frames[f] = given[t];
+    }
+}
+
+// Loads the frames of a PMD animation sheet (one row per facing, or a single row shown as `facing`), each
+// cropped to what it shows. The sprite anchor (the frame center) is drawn in the middle of the cell, `ground`
+// rows above his feet (set by the first PMD animation loaded): higher frames are lifted, lower ones raised
+// to the floor. With its Offsets sheet, the anchor follows his body (the green mark) as it moves away from
+// the first frame of the row, along the axes in `inplace` (1 x, 2 y), so he acts on the spot.
+void LoadPmdFrames(const Sheet& sheet, const Sheet* offsets, int inplace, const PmdAnim& a, int facing, int& ground,
+                   Animation& anim, const std::wstring& where) {
+    const int rows = sheet.h / a.h;
+    int cols = sheet.w / a.w;
+    if (!a.durations.empty()) cols = std::min(cols, static_cast<int>(a.durations.size()));
+    if (cols < 1 || (rows != 1 && rows != kFacingCount)) throw LoadError{where + L": sheet does not match AnimData.xml"};
+    if (offsets && (offsets->w < cols * a.w || offsets->h < rows * a.h))
+        throw LoadError{where + L": Offsets sheet does not match AnimData.xml"};
+    const int ax = a.w / 2, ay = a.h / 2;
+    const auto used = [&](int c) {
+        return anim.cycle.empty() || std::any_of(anim.cycle.begin(), anim.cycle.end(), [&](int i) { return i % cols == c; });
+    };
+    struct Box {
+        int left = 0, top = 0, right = 0, bottom = 0;  // visible pixels of a frame; empty when blank
+    };
+    const auto visible = [&](int r, int c) {
+        Box b{a.w, a.h, 0, 0};
+        for (int y = 0; y < a.h; ++y) {
+            const uint32_t* row = &sheet.px[static_cast<size_t>(r * a.h + y) * sheet.w + c * a.w];
+            for (int x = 0; x < a.w; ++x) {
+                if (!(row[x] >> 24)) continue;
+                b = {std::min(b.left, x), std::min(b.top, y), std::max(b.right, x + 1), std::max(b.bottom, y + 1)};
+            }
+        }
+        return b.right ? b : Box{ax - 1, ay, ax + 1, ay + 1};  // blank: 2 x 1 clear pixels at the anchor
+    };
+    // His body mark in a frame (opaque green), or the frame center.
+    const auto body = [&](int r, int c) {
+        for (int y = 0; offsets && y < a.h; ++y) {
+            const uint32_t* row = &offsets->px[static_cast<size_t>(r * a.h + y) * offsets->w + c * a.w];
+            for (int x = 0; x < a.w; ++x)
+                if (row[x] == 0xFF00FF00) return std::pair<int, int>{x, y};
+        }
+        return std::pair<int, int>{ax, ay};
+    };
+
+    if (ground == INT_MIN) {
+        int lowest = 0;
+        for (int r = 0; r < rows; ++r)
+            for (int c = 0; c < cols; ++c)
+                if (used(c)) lowest = std::max(lowest, visible(r, c).bottom);
+        ground = lowest - ay;
+    }
+    for (int r = 0; r < rows; ++r) {
+        // Sheet rows go S, SE, E, ... counterclockwise.
+        const int f = rows == 1 ? facing : (kFacingCount - r) % kFacingCount;
+        const auto [bx0, by0] = body(r, 0);
+        std::vector<Sprite> frames(cols);
+        int first = -1;
+        for (int c = 0; c < cols; ++c) {
+            if (!used(c)) continue;
+            Box b = visible(r, c);
+            if ((b.right - b.left) % 2) (b.left > 0 ? --b.left : ++b.right);  // even, so the anchor stays put
+            const auto [bx, by] = body(r, c);
+            const int anchorX = ax + (inplace & 1 ? bx - bx0 : 0), anchorY = ay + (inplace & 2 ? by - by0 : 0);
+            Sprite& s = frames[c];
+            s.sheet = &sheet;
+            s.x = c * a.w + b.left;
+            s.y = r * a.h + b.top;
+            s.w = b.right - b.left;
+            s.h = b.bottom - b.top;
+            s.dx = b.left + s.w / 2 - anchorX;
+            s.lift = std::max(0, anchorY + ground - b.bottom);
+            Measure(s);
+            if (first < 0) first = c;
+        }
+        for (int c = 0; c < cols; ++c)
+            if (!used(c)) frames[c] = frames[first];  // never shown
+        anim.frames[f] = std::move(frames);
     }
 }
 
@@ -261,6 +404,14 @@ std::unique_ptr<PetDef> LoadPet(const std::wstring& dir, const std::wstring& id,
         def->cellH = v[1];
     }
 
+    PmdData pmd;
+    if (const std::wstring* file = Find(pet, L"pmd")) {
+        std::vector<std::wstring> xml;
+        if (!ReadLines(Join(dir, *file), xml)) throw LoadError{L"cannot read " + *file};
+        pmd = ParseAnimData(xml);
+    }
+    int ground = INT_MIN;  // PMD: rows from the anchor down to his feet (see LoadPmdFrames)
+
     std::map<std::wstring, const Sheet*> sheets;  // by lowercase file name
     const auto sheetFor = [&](const std::wstring& file, const std::wstring& where) {
         if (file.empty()) throw LoadError{where + L": no sheet (set sheet in [pet] or here)"};
@@ -278,7 +429,60 @@ std::unique_ptr<PetDef> LoadPet(const std::wstring& dir, const std::wstring& id,
         const Section& section = it->second;
         const std::wstring where = L"[" + std::wstring(kAnimNames[a]) + L"]";
         const std::wstring file = Value(section, L"sheet", Value(pet, L"sheet", L""));
-        Animation& anim = def->anims[a];
+        Animation base;  // options shared by its variants
+        if (const std::wstring* cycle = Find(section, L"cycle")) {
+            for (int i : Ints(*cycle, where + L" cycle")) {
+                if (i < 1) throw LoadError{where + L" cycle: frames count from 1"};
+                base.cycle.push_back(i - 1);
+            }
+        }
+        base.loop = Value(section, L"loop", L"1") != L"0";
+        std::vector<unsigned long long> fixedMs;
+        if (const std::wstring* d = Find(section, L"durations")) {
+            for (int v : Ints(*d, where + L" durations")) {
+                if (v < 1) throw LoadError{where + L" durations: expected ms above 0"};
+                fixedMs.push_back(v);
+            }
+        }
+        // Each step of the order lasts its `durations` entry (ms), or its PMD frame's duration (1/60 s).
+        const auto time = [&](Animation& anim, const std::vector<int>& ticks) {
+            std::vector<unsigned long long> ms = fixedMs;
+            if (ms.empty() && !ticks.empty()) {
+                const size_t steps = anim.cycle.empty() ? ticks.size() : anim.cycle.size();
+                for (size_t i = 0; i < steps; ++i)
+                    ms.push_back((ticks[(anim.cycle.empty() ? i : anim.cycle[i]) % ticks.size()] * 1000 + 30) / 60);
+            }
+            unsigned long long end = 0;
+            for (unsigned long long v : ms) anim.ends.push_back(end += v);
+        };
+
+        if (const std::wstring* names = Find(section, L"anim")) {
+            // PMD animations, comma-separated: one is picked each time.
+            if (!Find(pet, L"pmd")) throw LoadError{where + L" anim: needs [pet] pmd"};
+            const std::wstring row = Value(section, L"facing", L"S");
+            const auto facing = std::find_if(std::begin(kFacingNames), std::end(kFacingNames),
+                                             [&](const wchar_t* n) { return Lower(n) == Lower(row); });
+            if (facing == std::end(kFacingNames)) throw LoadError{where + L" facing: unknown \"" + row + L"\""};
+            const std::wstring axes = Lower(Value(section, L"inplace", L""));
+            if (axes != L"" && axes != L"x" && axes != L"xy") throw LoadError{where + L" inplace: expected x or xy"};
+            const int inplace = axes.empty() ? 0 : (axes == L"x" ? 1 : 3);
+            for (size_t start = 0; start <= names->size();) {
+                const size_t comma = std::min(names->find(L',', start), names->size());
+                const std::wstring name = Trim(names->substr(start, comma - start));
+                start = comma + 1;
+                if (name.empty()) throw LoadError{where + L" anim: empty name"};
+                const PmdAnim& pa = FindPmd(pmd, name, where);
+                Animation anim = base;
+                LoadPmdFrames(*sheetFor(pa.name + L"-Anim.png", where),
+                              inplace ? sheetFor(pa.name + L"-Offsets.png", where) : nullptr, inplace, pa,
+                              static_cast<int>(facing - kFacingNames), ground, anim, where + L" " + name);
+                time(anim, pa.durations);
+                def->anims[a].push_back(std::move(anim));
+            }
+            continue;
+        }
+
+        Animation anim = base;
         for (int f = 0; f < kFacingCount; ++f) {
             const std::wstring* frames = Find(section, kFacingNames[f]);
             if (!frames) continue;
@@ -306,42 +510,52 @@ std::unique_ptr<PetDef> LoadPet(const std::wstring& dir, const std::wstring& id,
                 anim.frames[f].push_back(s);
             }
         }
-        if (const std::wstring* cycle = Find(section, L"cycle")) {
-            for (int i : Ints(*cycle, where + L" cycle")) {
-                if (i < 1) throw LoadError{where + L" cycle: frames count from 1"};
-                anim.cycle.push_back(i - 1);
-            }
-        }
+        time(anim, {});
+        def->anims[a].push_back(std::move(anim));
     }
 
-    const auto given = [](const Animation& anim) {
-        return std::any_of(std::begin(anim.frames), std::end(anim.frames), [](const auto& v) { return !v.empty(); });
-    };
-    if (!given(def->anims[kWalk])) throw LoadError{L"[walk] has no frames"};
-    def->canType = given(def->anims[kType]);
+    // Variants without any frame are dropped.
+    for (auto& variants : def->anims) {
+        variants.erase(std::remove_if(variants.begin(), variants.end(),
+                                      [](const Animation& anim) {
+                                          return std::all_of(std::begin(anim.frames), std::end(anim.frames),
+                                                             [](const auto& v) { return v.empty(); });
+                                      }),
+                       variants.end());
+    }
+    if (def->anims[kWalk].empty()) throw LoadError{L"[walk] has no frames"};
+    def->canType = !def->anims[kType].empty();
+    def->canPlay = !def->anims[kPlay].empty();
+    def->canTurn = !def->anims[kTurn].empty();
 
     // The cell holds every frame (by default, just so).
     const bool fixedCell = def->cellW > 0;
-    for (const Animation& anim : def->anims) {
-        for (const auto& frames : anim.frames) {
-            for (const Sprite& s : frames) {
-                if (fixedCell && (s.w > def->cellW || s.h > def->cellH))
-                    throw LoadError{L"a frame is larger than [pet] cell"};
-                def->cellW = std::max(def->cellW, s.w);
-                def->cellH = std::max(def->cellH, s.h);
+    for (const auto& variants : def->anims) {
+        for (const Animation& anim : variants) {
+            for (const auto& frames : anim.frames) {
+                for (const Sprite& s : frames) {
+                    const int w = s.w + 2 * std::abs(s.dx);
+                    if (fixedCell && (w > def->cellW || s.h + s.lift > def->cellH))
+                        throw LoadError{L"a frame is larger than [pet] cell"};
+                    def->cellW = std::max(def->cellW, w);
+                    def->cellH = std::max(def->cellH, s.h + s.lift);
+                }
             }
         }
     }
+    // Square, so it fits the same box turned onto a wall (Spider-Man mode) and rolls around corners on it.
+    def->cellW = def->cellH = std::max(def->cellW, def->cellH);
 
     const auto walkIt = ini.find(L"walk");
     def->stand = std::max(1, Ints(Value(walkIt->second, L"stand", L"1"), L"[walk] stand")[0]) - 1;
-    FillFacings(def->anims[kWalk]);
+    for (Animation& anim : def->anims[kWalk]) FillFacings(anim);
     // Missing animations show him standing.
-    for (Animation& anim : def->anims) {
-        if (given(anim)) {
-            FillFacings(anim);
+    for (auto& variants : def->anims) {
+        if (!variants.empty()) {
+            for (Animation& anim : variants) FillFacings(anim);
             continue;
         }
+        Animation& anim = variants.emplace_back();
         for (int f = 0; f < kFacingCount; ++f) anim.frames[f] = {def->Stand(f)};
     }
 
@@ -349,12 +563,14 @@ std::unique_ptr<PetDef> LoadPet(const std::wstring& dir, const std::wstring& id,
     def->sideGap = def->cellW;
     for (int f = 0; f < kFacingCount; ++f) {
         const Sprite& s = def->Stand(f);
-        const int ox = (def->cellW - s.w) / 2;
+        const int ox = (def->cellW - s.w) / 2 + s.dx;
         def->sideGap = std::min({def->sideGap, ox + s.left, def->cellW - ox - s.w + s.right});
     }
 
-    def->zzzX = def->cellW * 0.6;
-    def->zzzY = def->cellH * 0.25;
+    // By default, just above the head of the first head-on-the-right sleeping frame.
+    const Sprite& sleep = def->anims[kSleep][0].frames[kE][0];
+    def->zzzX = (def->cellW - sleep.w) / 2 + sleep.dx + sleep.w * 0.65;
+    def->zzzY = std::max(0, def->cellH - sleep.lift - sleep.h + sleep.top - 1);
     if (const std::wstring* zzz = Find(pet, L"zzz")) {
         const std::vector<int> v = Ints(*zzz, L"[pet] zzz");
         if (v.size() != 2) throw LoadError{L"[pet] zzz: expected x,y"};
@@ -375,14 +591,46 @@ std::unique_ptr<PetDef> LoadPet(const std::wstring& dir, const std::wstring& id,
 
 }  // namespace
 
-const Sprite& Animation::Frame(int facing, unsigned long long step) const {
+size_t Animation::Step(int facing, unsigned long long t, unsigned long long stepMs, unsigned long long* left) const {
+    const size_t steps = ends.empty() ? (cycle.empty() ? frames[facing].size() : cycle.size()) : ends.size();
+    if (steps <= 1) {
+        *left = kNever;
+        return 0;
+    }
+    if (!loop && t >= Length(facing, stepMs)) {
+        *left = kNever;
+        return steps - 1;
+    }
+    if (ends.empty()) {
+        *left = stepMs - t % stepMs;
+        return t / stepMs % steps;
+    }
+    const unsigned long long u = t % ends.back();
+    const size_t i = std::upper_bound(ends.begin(), ends.end(), u) - ends.begin();
+    *left = ends[i] - u;
+    return i;
+}
+
+const Sprite& Animation::Frame(int facing, unsigned long long t, unsigned long long stepMs) const {
     const std::vector<Sprite>& v = frames[facing];
-    const size_t i = cycle.empty() ? step % v.size() : cycle[step % cycle.size()] % v.size();
-    return v[i];
+    unsigned long long left;
+    const size_t step = Step(facing, t, stepMs, &left);
+    return v[(cycle.empty() ? step : cycle[step]) % v.size()];
+}
+
+unsigned long long Animation::Until(int facing, unsigned long long t, unsigned long long stepMs) const {
+    unsigned long long left;
+    Step(facing, t, stepMs, &left);
+    return left;
+}
+
+unsigned long long Animation::Length(int facing, unsigned long long stepMs) const {
+    if (!ends.empty()) return ends.back();
+    return (cycle.empty() ? frames[facing].size() : cycle.size()) * stepMs;
 }
 
 const Sprite& PetDef::Stand(int facing) const {
-    const std::vector<Sprite>& v = anims[kWalk].frames[facing];
+    const std::vector<Sprite>& v = anims[kWalk][0].frames[facing];
     return v[stand % v.size()];
 }
 

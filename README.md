@@ -65,34 +65,37 @@ bubble, lines starting with `#` are comments).
 Each pet is a folder `pets/<id>/` holding a `pet.ini` and the PNG sprite
 sheets it names; LemmyPet loads them all at startup and reports the broken
 ones. `pets/lemmy/pet.ini` uses a grid of cells, `pets/snorlax/pet.ini`
-free rectangles.
-
-`tools/import_pmd.py <dex> <id> <name>` builds such a folder from a
-[PMDCollab SpriteCollab](https://github.com/PMDCollab/SpriteCollab) sprite
-(CC BY-NC 4.0, credits in the generated `credits.txt`). Edit `cries.txt`
-for its bubble lines.
+a PMD sprite plus a hand-made laptop sheet.
 
 ```ini
 ; ';' or '#' start comments.
 [pet]
-name = Snorlax          ; shown in the settings list (default: the folder name)
-sheet = snorlax.png     ; default sheet of every animation
-cell = 33               ; frame box in sprite px ("w,h" also works); default: the largest frame
+name = Lemmy            ; shown in the settings list (default: the folder name)
+sheet = lemmy.png       ; default sheet of every animation
+cell = 45               ; frame box in sprite px ("w,h" also works); default: the largest frame
+                        ; (the box he is drawn in is made square, for walls and corners)
 halo = 1                ; default of his "White halo" setting (0: off)
-zzz = 22,11             ; where the Z's start in the cell, head on the right
-lyrics = growls.txt     ; lines typed in his bubble (none: no bubble)
+zzz = 26,12             ; where the Z's start in the cell, head on the right (default: above
+                        ; the head of the first sleep frame)
+lyrics = lyrics.txt     ; lines typed in his bubble (none: no bubble)
 
 [walk]                  ; required
 cycle = 1,2,3,2         ; frame order (default: each frame in turn)
 stand = 2               ; frame shown while idle (default: 1)
-S = 145,20,25,27 172,20,28,27 202,20,25,27
-W = 145,83,21,31 168,82,21,32 191,83,21,31
+S = 0,0 1,0 2,0
+W = 0,1 1,1 2,1
 ```
 
-- **Animations**: `[walk]`, `[sulk]` (cursor came too close), `[hurt]`
-  (bumped or dragged), `[sleep]` and `[type]` (laptop). Each one may set its
-  own `sheet` and `cycle`. A missing one shows him standing; without
-  `[type]` he never types.
+- **Animations**: `[walk]`, `[idle]` (standing still), `[sulk]` (cursor
+  came too close), `[hurt]` (bumped or dragged), `[sleep]`, `[type]`
+  (laptop), `[play]` (now and then while idle, played once) and `[turn]`
+  (turning on the spot before walking off another way: frame *i* of facing
+  *f* shows facing *f + i* clockwise, like PMD's Rotate). Each one
+  may set its own `sheet`, `cycle`, `durations` (ms of each step of the
+  cycle, at 100 % speed) and `loop = 0` (plays once, then holds the last
+  frame). They start over with each new state. A missing one shows him
+  standing (walk frame `stand`); without `[type]` he never types, without
+  `[play]` he never plays, without `[turn]` he turns at once.
 - **Facings**: one key per direction, `S SW W NW N NE E SE`, each listing
   frames separated by spaces. Missing facings borrow from the closest one:
   `SW` and `NW` from `W`, then `W` from `E` mirrored, and so on. `[sleep]`
@@ -102,6 +105,42 @@ W = 145,83,21,31 168,82,21,32 191,83,21,31
   bottom-centered in the cell.
 - **Scale**: the settings size is a multiple of the sheet pixels (crisp at
   whole multiples).
+
+### PMD sprites
+
+A [PMDCollab SpriteCollab](https://github.com/PMDCollab/SpriteCollab) sprite
+folder (`AnimData.xml` and its `<Name>-Anim.png` sheets) is read as is:
+
+```ini
+[pet]
+pmd = AnimData.xml      ; sections may then play its animations
+
+[walk]
+anim = Walk             ; instead of the facing keys: all 8 facings, its frame durations
+
+[sulk]
+anim = Attack, Shoot    ; several: one picked at random each time
+cycle = 1,2             ; frames of each to play (the frame width fits just those)
+durations = 250,250     ; overrides their durations
+
+[play]
+anim = Hop, Swing
+inplace = x             ; on the spot: x (keeps jumps) or xy, after his body marks (<Name>-Offsets.png)
+
+[sleep]
+anim = Sleep
+facing = E              ; facing of a one-row sheet (default: S)
+```
+
+Each frame keeps the sprite anchor (the frame center) at the same place,
+his feet on the lowest row of the first PMD animation (normally `[walk]`):
+frames above it stay in the air (hops), frames going lower are raised onto
+the floor (lunges toward the viewer). `tools/import_pmd.py <dex> <id> <name>
+[--sleep-head left|right]` downloads such a folder into `pets/<id>/` with a
+`pet.ini` using every animation (the ones no other section takes go to
+`[play]`, sulking on the spot, playing on the spot but still jumping; CC
+BY-NC 4.0, credits in `credits.txt`); re-importing keeps its
+`lyrics` file and a `[type]` section with its own `sheet`.
 
 ## Build
 

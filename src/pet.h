@@ -22,25 +22,30 @@ constexpr UINT_PTR kTimerId = 1;
 constexpr ULONGLONG kZzzStepMs = 40;     // overlay redraw granularity
 
 struct Pace {
-    double walkSpeed;  // sprite px per second
-    ULONGLONG walkFrameMs, sleepFrameMs, sulkFrameMs, typeFrameMs, zzzLifeMs;
+    double walkSpeed;       // sprite px per second
+    double walkRate, rate;  // animation speed of walking and of everything else, 1 at 100 %
+    ULONGLONG zzzLifeMs;
 };
-inline constexpr Pace kBasePace = {30.0, 150, 700, 250, 110, 2400};  // at 100 % speed
-// Speed setting, in percent of kBasePace.
+constexpr double kBaseWalkSpeed = 30.0;  // at 100 % speed
+constexpr ULONGLONG kBaseZzzLifeMs = 2400;
+// Frame time at 100 % speed of the animations without their own timing, by Anim.
+inline constexpr ULONGLONG kFrameMs[kAnimCount] = {150, 250, 250, 250, 700, 110, 150, 40};
+// Speed setting, in percent of the base pace.
 constexpr int kMinSpeedPct = 20, kMaxSpeedPct = 400, kSpeedStepPct = 5, kDefaultSpeedPct = 100;
 
 struct ActivityPreset {
     const wchar_t* name;
     int idleMinMs, idleMaxMs;
     int walkPct, sleepPct, typePct;  // chances after an idle pause (the rest: idle again)
+    int playPct;            // chance to play a [play] animation instead, if he has some
     int sleepMinMs, sleepMaxMs;
     int typeMinMs, typeMaxMs;
     int chainWalkPct;       // chance to start a new walk right after arriving
 };
 inline constexpr ActivityPreset kActivities[] = {
-    {L"Lazy", 2000, 5000, 50, 30, 10, 15000, 40000, 5000, 15000, 20},
-    {L"Normal", 600, 1500, 80, 8, 7, 10000, 30000, 5000, 12000, 50},
-    {L"Hyperactive", 200, 700, 88, 3, 6, 6000, 15000, 4000, 8000, 75},
+    {L"Lazy", 2000, 5000, 50, 30, 10, 8, 15000, 40000, 5000, 15000, 20},
+    {L"Normal", 600, 1500, 80, 8, 7, 12, 10000, 30000, 5000, 12000, 50},
+    {L"Hyperactive", 200, 700, 88, 3, 6, 15, 6000, 15000, 4000, 8000, 75},
 };
 
 enum Reaction { kTeleport, kFlee, kIgnore };
@@ -52,7 +57,7 @@ constexpr int kMinScalePct = 50, kMaxScalePct = 800, kScaleStepPct = 5, kDefault
 
 struct Settings {
     int scale = kDefaultScalePct;  // percent of the sheet pixels
-    int speed = kDefaultSpeedPct;  // percent of kBasePace
+    int speed = kDefaultSpeedPct;  // percent of the base pace (see Speed)
     int activity = 1;  // index in kActivities
     int reaction = kTeleport;
     int opacity = 0;   // index in kOpacityPct
@@ -68,7 +73,7 @@ struct Settings {
     bool visible = true;
 };
 
-enum class State { Idle, Walk, Sleep, Flee, Sulk, Drag, Bump, Type };
+enum class State { Idle, Walk, Sleep, Flee, Sulk, Drag, Bump, Type, Play };
 
 struct Waypoint {
     int x, y;
@@ -105,6 +110,12 @@ struct Pet {
     std::vector<Waypoint> path;  // targets after the current one (crossing to another screen)
     int dir = 0;            // screen direction, a Facing
     State state = State::Idle;
+    State animState = State::Idle;  // state the current animation variant was picked for
+    ULONGLONG animStart = 0;        // animations start over with each state
+    size_t variant = 0;             // of the state's animation
+    int lastFacing = kS;            // facing last shown, standing or walking
+    int turnFrom = kS, turnTo = kS; // facings of the turn on the spot before walking (see TurnFrame)
+    ULONGLONG turnStart = 0;        // 0 when not turning
     ULONGLONG stateEnd = 0;
     ULONGLONG sleepStart = 0;
     int sleepSide = 0;      // 0 head on the right, 1 head on the left
@@ -165,9 +176,7 @@ inline double Scale(Pet& p) { return p.cfg.scale / 100.0; }
 // they stay readable at the extremes.
 inline Pace Speed(Pet& p) {
     const double f = p.cfg.speed / 100.0, r = std::sqrt(f);
-    const auto ms = [](ULONGLONG base, double k) { return static_cast<ULONGLONG>(std::max(1.0, base / k)); };
-    return {kBasePace.walkSpeed * f,      ms(kBasePace.walkFrameMs, f), ms(kBasePace.sleepFrameMs, r),
-            ms(kBasePace.sulkFrameMs, r), ms(kBasePace.typeFrameMs, r), ms(kBasePace.zzzLifeMs, r)};
+    return {kBaseWalkSpeed * f, f, r, static_cast<ULONGLONG>(std::max(1.0, kBaseZzzLifeMs / r))};
 }
 inline const ActivityPreset& Activity(Pet& p) { return kActivities[p.cfg.activity]; }
 

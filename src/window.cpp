@@ -30,7 +30,7 @@ void DragTo(Pet& p, POINT cursor) {
     p.x = nx;
     p.y = cursor.y - p.dragOffset.y;
     const ULONGLONG now = GetTickCount64();
-    Render(p, DragFrame(p, now), now);
+    Render(p, ShownFrame(p, now), now);
 }
 
 void EndDrag(Pet& p) {

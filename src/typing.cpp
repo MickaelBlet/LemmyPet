@@ -53,7 +53,8 @@ void OnKeystroke(Pet& p) {
     const bool burst = now - p.lastKeystroke <= kTypeBurstMs;
     p.lastKeystroke = now;
     if (p.state == State::Type ||
-        (burst && (p.state == State::Idle || p.state == State::Walk || p.state == State::Sleep)))
+        (burst && (p.state == State::Idle || p.state == State::Walk || p.state == State::Sleep ||
+                   p.state == State::Play)))
         EnterType(p, now, kTypeLingerMs);
     // He stays at the laptop while the bubble shows text.
     if (p.state == State::Type && !p.typed.empty()) EnterType(p, now, kBubbleLingerMs);
@@ -196,7 +197,7 @@ void UpdateBubble(Pet& p, ULONGLONG now) {
     const RECT area = CurrentWorkArea(p);
     // Top of his head on screen, wherever his feet stick (see BlitCanvas).
     const Sprite& f = *p.shown;
-    const LONG headOff = std::lround((p.def.cellH - f.h + f.top) * Scale(p));
+    const LONG headOff = std::lround((p.def.cellH - f.lift - f.h + f.top) * Scale(p));
     const LONG x = std::lround(p.x), y = std::lround(p.y);
     const LONG headX = orient == 1 ? x + p.cellW - headOff : (orient == 3 ? x + headOff : x + p.cellW / 2);
     const LONG headY = orient == 0 ? y + headOff : (orient == 2 ? y + p.cellH - headOff : y + p.cellH / 2);

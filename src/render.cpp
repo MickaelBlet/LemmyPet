@@ -20,7 +20,7 @@ constexpr size_t kFramesMaxBytes = 16 << 20;  // scaled frame cache budget, per 
 Pixels ScaleFrame(Pet& p, const Sprite& f) {
     const double s = Scale(p);
     const int fw = static_cast<int>(std::lround(f.w * s)), fh = static_cast<int>(std::lround(f.h * s));
-    const int ox = (p.cellW - fw) / 2, oy = p.cellH - fh;
+    const int ox = (p.cellW - fw) / 2 + static_cast<int>(std::lround(f.dx * s)), oy = p.cellH - fh - static_cast<int>(std::lround(f.lift * s));
     // Sprite pixel at a cell point (0 outside the sprite).
     const auto src = [&](int x, int y) -> uint32_t {
         x -= ox;

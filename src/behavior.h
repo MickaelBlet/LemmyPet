@@ -13,8 +13,8 @@ void EnterIdle(Pet& p, ULONGLONG now);
 void EnterWalk(Pet& p, ULONGLONG now);
 // Sits down with his laptop for at least durationMs, in profile if he was facing sideways.
 void EnterType(Pet& p, ULONGLONG now, ULONGLONG durationMs);
-// Dazed while carried, leaning toward where he is dragged.
-const Sprite& DragFrame(Pet& p, ULONGLONG now);
+// The frame his current state shows at `now`.
+const Sprite& ShownFrame(Pet& p, ULONGLONG now);
 void Tick(Pet& p);
 // (Re)starts his tick timer. The system may delay it a little to group wakeups with other timers.
 void ArmTimer(Pet& p, UINT period);

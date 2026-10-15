@@ -134,8 +134,9 @@ void ApplyCombo(Pet& p, int Settings::*field, int value) {
     if (field == &Settings::reaction) {
         p.nearSince = 0;
     } else if (field == &Settings::zone) {
-        // Heads into the new zone right away when idle or walking.
-        if (p.cfg.zone != kAnywhere && (p.state == State::Idle || p.state == State::Walk)) EnterWalk(p, GetTickCount64());
+        // Heads into the new zone right away when idle, playing or walking.
+        if (p.cfg.zone != kAnywhere && (p.state == State::Idle || p.state == State::Walk || p.state == State::Play))
+            EnterWalk(p, GetTickCount64());
     }
 }
 

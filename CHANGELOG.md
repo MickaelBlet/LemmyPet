@@ -38,12 +38,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - "Collide with other pets" per-pet option: pets that both have it bump
   into each other while walking or fleeing, bounce off, then sulk facing
   each other before going back to idle.
+- PMD sprites read natively: `[pet] pmd = AnimData.xml`, then
+  `anim = <Name>, ...` in a section plays those SpriteCollab animations
+  (all facings, frame durations, anchored frames, one picked at random
+  each time; frames going below his feet are raised onto the floor);
+  `cycle`, `durations` and `facing` adjust them.
+  `tools/import_pmd.py` now downloads the raw sprite folder and writes
+  such a `pet.ini` using every animation.
+- `[idle]` animation, played while standing still, and `[play]`
+  animations, played once now and then after an idle pause.
+- `inplace = x | xy` for PMD animations: each frame follows his body mark
+  (`<Name>-Offsets.png`), so lunges and swings happen on the spot (Snorlax
+  sulks on the spot and plays on the spot, still jumping).
+- `zzz` defaults to just above the head of the first sleep frame.
+- `[turn]` animation: he turns on the spot, the shorter way through the
+  facings in between, before walking off in another direction (Snorlax
+  uses PMD's Rotate).
+- `durations` (ms of each cycle step) and `loop = 0` (play once, hold the
+  last frame) per animation; animations start over with each state.
 - Settings window (`src/options.cpp`), opened by clicking the tray icon:
   pets listed on the left, drop-down lists and checkboxes applied right away,
   plus "Run at startup" and "Quit LemmyPet".
 
 ### Changed
 
+- Snorlax is now the PMDCollab SpriteCollab sprite 0143 read as is, with
+  all its animations (Walk, Idle, Attack / Shoot / Double when sulking,
+  Hurt, Sleep, Stomp / Swing / Hop / Charge / Rotate to play, and Rotate
+  to turn around), keeping his hand-made laptop frames.
 - The tray menu is reduced to "Settings...", show / hide all pets and
   "Quit"; the per-pet submenus move to the settings window, and a click
   on the icon opens it instead of double-click showing / hiding the pets.
@@ -73,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The cell a pet is drawn in is made square, so a pet with wider than tall
+  frames stays against walls in Spider-Man mode and rolls around corners
+  without jumping.
 - Multi-monitor: Lemmy only moves to an adjacent screen, walking through
   the shared border (along the floors in the bottom and edges zones)
   instead of cutting straight across gaps and other screens.

@@ -115,6 +115,89 @@ int TypingView(Pet& p) {
     return v == kW || v == kE ? v : kS;
 }
 
+struct Shown {
+    const Animation* anim;
+    ULONGLONG stepMs;  // its frame time, unless it has its own timing
+    int facing;
+    double rate;       // animation speed, 1 at 100 %
+};
+
+// The animation his state shows: the variant picked when the state started.
+Shown Showing(Pet& p) {
+    const Pace sp = Speed(p);
+    int anim = kIdle, facing = ViewDir(p);
+    double rate = sp.rate;
+    switch (p.state) {
+    case State::Idle: break;
+    case State::Walk: anim = kWalk, rate = sp.walkRate; break;
+    case State::Flee: anim = kWalk, rate = sp.walkRate * 2.0; break;
+    case State::Sulk: anim = kSulk; break;
+    case State::Sleep: anim = kSleep, facing = p.sleepSide == 0 ? kE : kW; break;
+    // Dazed while carried, leaning toward where he is dragged.
+    case State::Drag: anim = kHurt, facing = p.dragLean < 0 ? kSW : (p.dragLean > 0 ? kSE : kS); break;
+    case State::Bump: anim = kHurt; break;
+    case State::Type: anim = kType, facing = TypingView(p); break;
+    case State::Play: anim = kPlay; break;
+    }
+    const std::vector<Animation>& variants = p.def.anims[anim];
+    return {&variants[p.variant % variants.size()], kFrameMs[anim], facing, rate};
+}
+
+// Animation time played by `now` (ms at 100 % speed), from the start of his state.
+ULONGLONG Clock(Pet& p, ULONGLONG now, double rate) { return static_cast<ULONGLONG>((now - p.animStart) * rate); }
+
+// Starts his animation over, picking a variant, when his state changes.
+void SyncAnim(Pet& p, ULONGLONG now) {
+    if (p.state == p.animState) return;
+    p.animState = p.state;
+    p.animStart = now;
+    p.variant = static_cast<size_t>(std::rand());
+    p.turnStart = 0;
+}
+
+// Turn on the spot: frame i of facing f of the [turn] animation shows facing f + i (clockwise, like PMD's
+// Rotate), so he plays the row he turns from forward, or the one he turns to backward, whichever is shorter.
+struct Turn {
+    const Animation* anim;
+    int steps;         // facings to go through
+    bool clockwise;
+    double stepMs;     // real time per facing
+};
+
+Turn FacingTurn(Pet& p, int from, int to) {
+    const std::vector<Animation>& variants = p.def.anims[kTurn];
+    const Animation& anim = variants[p.variant % variants.size()];
+    const int k = (to - from + kFacingCount) % kFacingCount;
+    const size_t frames = std::max<size_t>(1, anim.frames[kS].size());
+    const double stepMs = static_cast<double>(anim.Length(kS, kFrameMs[kTurn])) / frames / Speed(p).rate;
+    return {&anim, k <= 4 ? k : kFacingCount - k, k <= 4, stepMs};
+}
+
+// Still turning toward his walking direction (see ShownFrame).
+bool TurningAround(Pet& p, ULONGLONG now) {
+    if (!p.turnStart) return false;
+    const Turn turn = FacingTurn(p, p.turnFrom, p.turnTo);
+    if (now - p.turnStart < turn.steps * turn.stepMs) return true;
+    p.turnStart = 0;
+    p.lastFacing = p.turnTo;
+    return false;
+}
+
+const Sprite& TurnFrame(Pet& p, ULONGLONG now) {
+    const Turn turn = FacingTurn(p, p.turnFrom, p.turnTo);
+    const int i = std::min(turn.steps - 1, static_cast<int>((now - p.turnStart) / turn.stepMs));
+    const std::vector<Sprite>& v = turn.anim->frames[turn.clockwise ? p.turnFrom : p.turnTo];
+    return v[static_cast<size_t>(turn.clockwise ? i : turn.steps - i) % v.size()];
+}
+
+// Plays one of his [play] animations once, where he stands.
+void EnterPlay(Pet& p, ULONGLONG now) {
+    p.state = State::Play;
+    SyncAnim(p, now);
+    const Shown shown = Showing(p);
+    p.stateEnd = now + static_cast<ULONGLONG>(std::ceil(shown.anim->Length(shown.facing, shown.stepMs) / shown.rate));
+}
+
 // Plans a walk onto a random screen next to the current one, through their shared border, so he never
 // cuts across the void between screens. In the bottom and edges zones he walks along the floors (from
 // the floor only), climbing or dropping at the border when they differ. Returns false when there is
@@ -256,7 +339,7 @@ void EnterBump(Pet& p, ULONGLONG now, bool sulkAfter) {
 RECT BodyRect(Pet& p) {
     const Sprite& s = p.def.Stand(kS);
     const int gap = static_cast<int>(std::lround(p.def.sideGap * Scale(p)));
-    const int head = static_cast<int>(std::lround((p.def.cellH - (s.h - s.top)) * Scale(p)));
+    const int head = static_cast<int>(std::lround((p.def.cellH - s.lift - (s.h - s.top)) * Scale(p)));
     int inset[4];  // by edge, numbered as orientations: 0 bottom, 1 left, 2 top, 3 right
     inset[p.orient] = 0;
     inset[(p.orient + 2) % 4] = head;
@@ -365,6 +448,10 @@ void NextState(Pet& p, ULONGLONG now) {
         return;
     }
     const ActivityPreset& act = Activity(p);
+    if (p.state == State::Idle && p.def.canPlay && RandRange(0, 99) < act.playPct) {
+        EnterPlay(p, now);
+        return;
+    }
     const int r = RandRange(0, 99);
     if (r < act.walkPct) EnterWalk(p, now);
     else if (r < act.walkPct + act.sleepPct) EnterSleep(p, now);
@@ -377,30 +464,24 @@ void NextState(Pet& p, ULONGLONG now) {
 // otherwise until his frame (or the "Zzz", or the bubble) next changes, his state ends, or the cursor is
 // due a check.
 UINT TickPeriod(Pet& p, ULONGLONG now) {
+    if (p.state == State::Walk && p.turnStart) return kTickMs;
     if (p.state == State::Walk)
         return Clamp(static_cast<UINT>(1000.0 / (Speed(p).walkSpeed * Scale(p))), kTickMs, kSlowTickMs);
     if (p.state == State::Flee || p.state == State::Bump || p.fading || Turning(p)) return kTickMs;
-    const Pace sp = Speed(p);
-    ULONGLONG wait = kPollMs;
-    const auto until = [&](ULONGLONG t) {
-        if (t > now) wait = std::min(wait, t - now);
+    const Shown shown = Showing(p);
+    const ULONGLONG left = shown.anim->Until(shown.facing, Clock(p, now, shown.rate), shown.stepMs);
+    ULONGLONG wait = left == kNever ? kPollMs : std::min(kPollMs, static_cast<ULONGLONG>(std::ceil(left / shown.rate)));
+    const auto until = [&](ULONGLONG at) {
+        if (at > now) wait = std::min(wait, at - now);
     };
-    // Next step of an animation counting `stepMs` steps from `origin`.
-    const auto step = [&](ULONGLONG stepMs, ULONGLONG origin) { wait = std::min(wait, stepMs - (now - origin) % stepMs); };
     switch (p.state) {
     case State::Sleep:
-        if (p.cfg.zzz) step(kZzzStepMs, p.sleepStart);
-        else step(sp.sleepFrameMs, 0);
+        if (p.cfg.zzz) wait = std::min(wait, kZzzStepMs - (now - p.sleepStart) % kZzzStepMs);
         break;
-    case State::Sulk: step(sp.sulkFrameMs, 0); break;
     case State::Drag:
-        step(sp.sulkFrameMs, 0);
         if (p.dragLean) until(p.lastDragMove + kDragLeanMs);
         break;
-    case State::Type:
-        step(sp.typeFrameMs, 0);
-        wait = std::min(wait, BubbleWait(p, now));
-        break;
+    case State::Type: wait = std::min(wait, BubbleWait(p, now)); break;
     default: break;
     }
     until(p.stateEnd);
@@ -489,10 +570,18 @@ void EnterWalk(Pet& p, ULONGLONG now) {
     p.state = State::Walk;
 }
 
-// Dazed while carried, leaning toward where he is dragged.
-const Sprite& DragFrame(Pet& p, ULONGLONG now) {
-    const int facing = p.dragLean < 0 ? kSW : (p.dragLean > 0 ? kSE : kS);
-    return p.def.anims[kHurt].Frame(facing, now / Speed(p).sulkFrameMs);
+const Sprite& ShownFrame(Pet& p, ULONGLONG now) {
+    SyncAnim(p, now);
+    // Setting off in another direction: turns on the spot first (the walk waits, see Tick).
+    if (p.state == State::Walk && p.def.canTurn && !p.turnStart && ViewDir(p) != p.lastFacing) {
+        p.turnFrom = p.lastFacing;
+        p.turnTo = ViewDir(p);
+        p.turnStart = now;
+    }
+    if (p.turnStart && TurningAround(p, now)) return TurnFrame(p, now);
+    const Shown shown = Showing(p);
+    if (p.state != State::Sleep && p.state != State::Drag) p.lastFacing = shown.facing;
+    return shown.anim->Frame(shown.facing, Clock(p, now, shown.rate), shown.stepMs);
 }
 
 void Tick(Pet& p) {
@@ -530,7 +619,7 @@ void Tick(Pet& p) {
 
     switch (p.state) {
     case State::Walk:
-        if (Turning(p)) break;  // rolls around the corner before walking on
+        if (Turning(p) || TurningAround(p, now)) break;  // rolls around the corner / turns before walking on
         if (MoveToTarget(p, walkSpeed * dt)) {
             if (!p.path.empty()) NextWaypoint(p);
             else if (p.bumpOnArrival) EnterBump(p, now, false);
@@ -577,19 +666,7 @@ void Tick(Pet& p) {
     p.fading = p.alpha != targetAlpha;
 
     StepTurn(p, dt);
-    const Pace sp = Speed(p);
-    const Animation* anims = p.def.anims;
-    const int facing = ViewDir(p);
-    switch (p.state) {
-    case State::Walk: Render(p, anims[kWalk].Frame(facing, now / sp.walkFrameMs), now); break;
-    case State::Flee: Render(p, anims[kWalk].Frame(facing, now / (sp.walkFrameMs / 2)), now); break;
-    case State::Sulk: Render(p, anims[kSulk].Frame(facing, now / sp.sulkFrameMs), now); break;
-    case State::Idle: Render(p, p.def.Stand(facing), now); break;
-    case State::Sleep: Render(p, anims[kSleep].Frame(p.sleepSide == 0 ? kE : kW, now / sp.sleepFrameMs), now); break;
-    case State::Drag: Render(p, DragFrame(p, now), now); break;
-    case State::Bump: Render(p, anims[kHurt].Frame(facing, now / sp.sulkFrameMs), now); break;
-    case State::Type: Render(p, anims[kType].Frame(TypingView(p), now / sp.typeFrameMs), now); break;
-    }
+    Render(p, ShownFrame(p, now), now);
     UpdateBubble(p, now);
 
     if (now - p.lastTopmost >= kTopmostMs) {
