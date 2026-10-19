@@ -10,6 +10,8 @@ namespace {
 
 constexpr UINT kSlowTickMs = 50;  // slowest walking tick
 constexpr ULONGLONG kPollMs = 100;  // longest wait between ticks otherwise (cursor checks)
+constexpr ULONGLONG kFarPollMs = 500;    // longest wait between cursor checks while it is far
+constexpr double kCursorPxPerMs = 4.0;   // fast cursor flick, to space out the checks while it is far
 constexpr int kWalkRangeUnits = 200;     // max walk distance per axis
 constexpr double kFleeSpeedFactor = 6.0; // min flee speed relative to walk speed
 constexpr double kFleeMaxMs = 1500.0;    // runs faster on long flees to reach the corner within this time
@@ -22,7 +24,7 @@ constexpr ULONGLONG kBumpShakeMs = 350;
 constexpr int kBumpChancePct = 50;       // chance a walk cut short by an edge ends in a bump
 constexpr int kCrossChancePct = 15;      // chance a walk heads to a neighboring screen
 constexpr double kBumpKnockUnits = 8.0;  // knockback distance
-constexpr ULONGLONG kMouseIdleMs = 30000;  // cursor stillness before he falls asleep (if enabled)
+constexpr DWORD kInputIdleMs = 30000;  // mouse and keyboard stillness before he falls asleep (if enabled)
 constexpr ULONGLONG kDragLeanMs = 150;   // drag lean resets after this long without movement
 constexpr double kFadedRatio = 0.47;    // opacity multiplier while the cursor is near
 constexpr double kFadeSpeed = 1500.0;    // alpha units per second
@@ -94,8 +96,11 @@ bool MoveToTarget(Pet& p, double step) {
     return false;
 }
 
-bool MouseIdle(Pet& p, ULONGLONG now) {
-    return p.cfg.sleepOnMouseIdle && now - p.lastCursorMove >= kMouseIdleMs;
+// Whether the user has left mouse and keyboard alone long enough (if enabled).
+bool InputIdle(const Pet& p) {
+    if (!p.cfg.sleepOnIdle) return false;
+    LASTINPUTINFO li{sizeof(li)};
+    return GetLastInputInfo(&li) && GetTickCount() - li.dwTime >= kInputIdleMs;
 }
 
 // Lies down, head toward the side he was facing (on a wall, always head up).
@@ -303,7 +308,7 @@ void EnterSulk(Pet& p, ULONGLONG now, bool atPet = false) {
     p.petBump = atPet;
     p.state = State::Sulk;
     p.stateEnd = now + kSulkMs;
-    p.nearSince = 0;
+    if (!atPet) p.nearSince = 0;
 }
 
 // Bounces off the screen edge(s) he is touching, dazed, then idles (or sulks after a flee).
@@ -348,9 +353,10 @@ RECT BodyRect(Pet& p) {
     return {x + inset[1], y + inset[2], x + p.cellW - inset[3], y + p.cellH - inset[0]};
 }
 
-// Pets that can run into each other right now.
+// Pets that can run into each other right now (fleeing ones slip past the others).
 bool Solid(Pet& p) {
-    return p.cfg.collisions && p.cfg.visible && p.state != State::Drag && p.state != State::Bump;
+    return p.cfg.collisions && p.cfg.visible && p.state != State::Drag && p.state != State::Bump &&
+           p.state != State::Flee;
 }
 
 // Bounces off the pet he ran into (or that ran into him), dazed, then sulks at it.
@@ -375,12 +381,11 @@ void EnterPetBump(Pet& p, const Pet& other, ULONGLONG now) {
     p.stateEnd = now + kBumpMs;
     p.sulkAfterBump = true;
     p.petBump = true;
-    p.nearSince = 0;
 }
 
-// While walking or fleeing into another pet (both with collisions on), both bounce off and get angry.
+// While walking into another pet (both with collisions on), both bounce off and get angry.
 void CheckCollisions(Pet& p, ULONGLONG now) {
-    if (!Solid(p) || (p.state != State::Walk && p.state != State::Flee)) return;
+    if (!Solid(p) || p.state != State::Walk) return;
     const RECT body = BodyRect(p);
     for (const auto& o : g.pets) {
         Pet& q = *o;
@@ -443,7 +448,7 @@ void NextState(Pet& p, ULONGLONG now) {
         EnterIdle(p, now);
         return;
     }
-    if (MouseIdle(p, now)) {
+    if (InputIdle(p)) {
         EnterSleep(p, now);
         return;
     }
@@ -460,23 +465,35 @@ void NextState(Pet& p, ULONGLONG now) {
     else EnterIdle(p, now);
 }
 
-// Time until his next tick: about a pixel per tick while walking, fine while moving fast or fading,
+// Longest wait before his next tick for the cursor's or the user's sake: none for a cursor he ignores,
+// sparser while it is far.
+ULONGLONG PollWait(Pet& p, ULONGLONG now) {
+    if (p.state == State::Sleep && now >= p.stateEnd) return kPollMs;  // kept asleep by idle input
+    if (p.cfg.reaction == kIgnore) return kTopmostMs;
+    return Clamp(static_cast<ULONGLONG>(std::max(0.0, p.cursorGap) / kCursorPxPerMs), kPollMs, kFarPollMs);
+}
+
+// Time until his next tick: about a sprite pixel per tick while walking, fine while moving fast or fading,
 // otherwise until his frame (or the "Zzz", or the bubble) next changes, his state ends, or the cursor is
 // due a check.
 UINT TickPeriod(Pet& p, ULONGLONG now) {
     if (p.state == State::Walk && p.turnStart) return kTickMs;
-    if (p.state == State::Walk)
-        return Clamp(static_cast<UINT>(1000.0 / (Speed(p).walkSpeed * Scale(p))), kTickMs, kSlowTickMs);
+    if (p.state == State::Walk) {
+        // About one sprite pixel per tick: pixel art moves on its own grid.
+        const double px = std::max(1.0, std::round(Scale(p)));
+        return Clamp(static_cast<UINT>(1000.0 * px / (Speed(p).walkSpeed * Scale(p))), kTickMs, kSlowTickMs);
+    }
     if (p.state == State::Flee || p.state == State::Bump || p.fading || Turning(p)) return kTickMs;
     const Shown shown = Showing(p);
     const ULONGLONG left = shown.anim->Until(shown.facing, Clock(p, now, shown.rate), shown.stepMs);
-    ULONGLONG wait = left == kNever ? kPollMs : std::min(kPollMs, static_cast<ULONGLONG>(std::ceil(left / shown.rate)));
+    const ULONGLONG poll = PollWait(p, now);
+    ULONGLONG wait = left == kNever ? poll : std::min(poll, static_cast<ULONGLONG>(std::ceil(left / shown.rate)));
     const auto until = [&](ULONGLONG at) {
         if (at > now) wait = std::min(wait, at - now);
     };
     switch (p.state) {
     case State::Sleep:
-        if (p.cfg.zzz) wait = std::min(wait, kZzzStepMs - (now - p.sleepStart) % kZzzStepMs);
+        if (p.cfg.zzz) wait = std::min(wait, ZzzStepMs(p) - (now - p.sleepStart) % ZzzStepMs(p));
         break;
     case State::Drag:
         if (p.dragLean) until(p.lastDragMove + kDragLeanMs);
@@ -593,18 +610,16 @@ void Tick(Pet& p) {
 
     POINT cursor;
     GetCursorPos(&cursor);
-    if (cursor.x != p.lastCursor.x || cursor.y != p.lastCursor.y) {
-        p.lastCursor = cursor;
-        p.lastCursorMove = now;
-    }
     const double cdx = cursor.x - (p.x + p.cellW / 2.0);
     const double cdy = cursor.y - (p.y + p.cellH / 2.0);
-    const bool cursorNear = std::hypot(cdx, cdy) < kNearRadiusUnits * Scale(p);
+    p.cursorGap = std::hypot(cdx, cdy) - kNearRadiusUnits * Scale(p);
+    const bool cursorNear = p.cursorGap < 0.0;
     // In draggable mode, hovering the sprite itself never scares him, so he can be grabbed.
     const bool hovered = cursorNear && p.cfg.draggable && WindowFromPoint(cursor) == p.hwnd;
+    // A fight with another pet never holds him back from reacting to the cursor.
     const auto wary = [&p, hovered] {
-        return p.cfg.reaction != kIgnore && !hovered && p.state != State::Sulk && p.state != State::Flee &&
-               p.state != State::Drag && p.state != State::Bump;
+        const bool dazed = (p.state == State::Bump || p.state == State::Sulk) && !p.petBump;
+        return p.cfg.reaction != kIgnore && !hovered && !dazed && p.state != State::Flee && p.state != State::Drag;
     };
 
     if (!cursorNear) {
@@ -612,6 +627,8 @@ void Tick(Pet& p) {
     } else if (wary()) {
         if (p.nearSince == 0) p.nearSince = now;
         else if (now - p.nearSince >= kReactDelayMs) {
+            p.shakeX = 0;
+            p.petBump = false;
             if (p.cfg.reaction == kTeleport) TeleportAway(p, now);
             else EnterFlee(p, cursor);
         }
@@ -623,7 +640,7 @@ void Tick(Pet& p) {
         if (MoveToTarget(p, walkSpeed * dt)) {
             if (!p.path.empty()) NextWaypoint(p);
             else if (p.bumpOnArrival) EnterBump(p, now, false);
-            else if (!MouseIdle(p, now) && RandRange(0, 99) < Activity(p).chainWalkPct) EnterWalk(p, now);
+            else if (!InputIdle(p) && RandRange(0, 99) < Activity(p).chainWalkPct) EnterWalk(p, now);
             else EnterIdle(p, now);
         }
         break;
@@ -652,8 +669,8 @@ void Tick(Pet& p) {
         if (now - p.lastDragMove >= kDragLeanMs) p.dragLean = 0;
         break;
     default:
-        // While the mouse rests (if enabled), he keeps sleeping until it moves again.
-        if (now >= p.stateEnd && !(p.state == State::Sleep && MouseIdle(p, now))) NextState(p, now);
+        // While mouse and keyboard rest (if enabled), he keeps sleeping until either is used again.
+        if (now >= p.stateEnd && !(p.state == State::Sleep && InputIdle(p))) NextState(p, now);
         break;
     }
     CheckCollisions(p, now);

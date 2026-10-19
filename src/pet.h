@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -19,7 +20,7 @@
 constexpr double kPi = 3.14159265358979323846;
 constexpr UINT kTickMs = 16;      // timer period while moving or fading
 constexpr UINT_PTR kTimerId = 1;
-constexpr ULONGLONG kZzzStepMs = 40;     // overlay redraw granularity
+constexpr int kZzzRiseUnits = 33;       // sprite px a "Z" rises over its life
 
 struct Pace {
     double walkSpeed;       // sprite px per second
@@ -63,7 +64,7 @@ struct Settings {
     int opacity = 0;   // index in kOpacityPct
     bool zzz = true;
     bool draggable = false;
-    bool sleepOnMouseIdle = false;  // sleeps while the mouse does not move
+    bool sleepOnIdle = false;  // sleeps while mouse and keyboard are not used
     bool typeWithUser = true;       // types on his laptop while the user types
     bool keyBubble = true;          // types his lines in a bubble while doing so (never the real keys)
     int zone = kAnywhere;  // where on the work area he may walk
@@ -124,8 +125,7 @@ struct Pet {
     bool fading = false;    // alpha still heading to its target
     ULONGLONG lastTopmost = 0;
     ULONGLONG nearSince = 0;  // 0 while the cursor is away
-    POINT lastCursor{INT_MIN, INT_MIN};
-    ULONGLONG lastCursorMove = 0;
+    double cursorGap = 0.0;   // screen px from the cursor to his reaction radius, as of the last tick
     bool bumpOnArrival = false;  // current walk ends against a screen edge
     bool sulkAfterBump = false;
     bool petBump = false;        // current bump or sulk comes from running into another pet
@@ -166,6 +166,7 @@ struct App {
     bool keyDown[256] = {};
     std::vector<std::unique_ptr<PetDef>> defs;
     std::vector<std::unique_ptr<Pet>> pets;
+    std::map<std::wstring, unsigned long long> stamps;  // of the pets/ folders, as of the last scan
     bool locked = false;      // session locked
     bool displayOff = false;  // console display off
     bool Paused() const { return locked || displayOff; }  // nothing to see: the pets stop ticking
@@ -178,6 +179,8 @@ inline Pace Speed(Pet& p) {
     const double f = p.cfg.speed / 100.0, r = std::sqrt(f);
     return {kBaseWalkSpeed * f, f, r, static_cast<ULONGLONG>(std::max(1.0, kBaseZzzLifeMs / r))};
 }
+// "Zzz" overlay redraw period: about one sprite pixel of rise.
+inline ULONGLONG ZzzStepMs(Pet& p) { return std::max<ULONGLONG>(1, Speed(p).zzzLifeMs / kZzzRiseUnits); }
 inline const ActivityPreset& Activity(Pet& p) { return kActivities[p.cfg.activity]; }
 
 inline int RandRange(int lo, int hi) {

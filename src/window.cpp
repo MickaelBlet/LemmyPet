@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "behavior.h"
+#include "options.h"
 #include "render.h"
 #include "settings.h"
 #include "typing.h"
@@ -185,4 +186,65 @@ bool CreatePets(HINSTANCE inst) {
 
 void DestroyPets() {
     for (const auto& p : g.pets) DestroyPet(*p);
+}
+
+std::wstring ReloadPets() {
+    std::map<std::wstring, unsigned long long> stamps = StampPets();
+    if (stamps == g.stamps) return {};
+    const HINSTANCE inst = GetModuleHandleW(nullptr);
+    const auto find = [](const std::wstring& id) {
+        return std::find_if(g.pets.begin(), g.pets.end(), [&](const auto& p) { return p->def.id == id; });
+    };
+    const auto drop = [](std::vector<std::unique_ptr<Pet>>::iterator it) {
+        const PetDef* def = &(*it)->def;
+        DestroyPet(**it);
+        g.pets.erase(it);
+        g.defs.erase(std::find_if(g.defs.begin(), g.defs.end(), [&](const auto& d) { return d.get() == def; }));
+    };
+    std::wstring errors;
+    for (auto it = g.pets.begin(); it != g.pets.end();) {
+        if (stamps.count((*it)->def.id)) {
+            ++it;
+        } else {
+            const auto next = it - g.pets.begin();
+            drop(it);
+            it = g.pets.begin() + next;
+        }
+    }
+    for (const auto& [id, stamp] : stamps) {
+        const auto old = g.stamps.find(id);
+        if (old != g.stamps.end() && old->second == stamp) continue;
+        std::wstring error;
+        std::unique_ptr<PetDef> def = LoadPetDef(id, error);
+        if (!def) {  // keeps the former version, if any
+            errors += L"pets\\" + id + L": " + error + L"\n";
+            continue;
+        }
+        // A changed pet comes back where he stood; a new one somewhere on the floor of the main screen.
+        RECT work;
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        int x = RandRange(work.left + def->cellW, work.right - def->cellW);
+        const auto it = find(id);
+        if (it != g.pets.end()) {
+            x = static_cast<int>(std::lround((*it)->x)) + (*it)->cellW / 2;
+            SaveSettings(**it);
+            drop(it);
+        }
+        g.defs.push_back(std::move(def));
+        auto pet = std::make_unique<Pet>(*g.defs.back());
+        if (!CreatePet(*pet, inst, x)) {
+            DestroyPet(*pet);
+            g.defs.pop_back();
+            errors += L"pets\\" + id + L": cannot create his windows\n";
+            continue;
+        }
+        g.pets.push_back(std::move(pet));
+    }
+    std::sort(g.pets.begin(), g.pets.end(), [](const auto& a, const auto& b) {
+        return _wcsicmp(a->def.id.c_str(), b->def.id.c_str()) < 0;
+    });
+    g.stamps = std::move(stamps);
+    UpdateKeyboardListener();
+    RebuildOptions();
+    return errors;
 }

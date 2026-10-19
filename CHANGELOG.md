@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The `pets/` folder is scanned every 5 seconds: added pets appear, deleted
+  ones leave and changed ones are reloaded where they stood (a pet that
+  fails to load keeps his former version; failures show in a tray balloon).
 - Size and speed set with sliders in the settings window: size x0.5 to x8
   in 0.05 steps, speed 20% to 400% in 5% steps (former presets carried
   over).
@@ -36,8 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   feet on a rounded path) instead of snapping from one edge to the next,
   and keeps the edge he came from while resting in a corner.
 - "Collide with other pets" per-pet option: pets that both have it bump
-  into each other while walking or fleeing, bounce off, then sulk facing
-  each other before going back to idle.
+  into each other while walking, bounce off, then sulk facing each other
+  before going back to idle; a fleeing pet slips past the others, and a
+  fight never keeps a pet from reacting to the cursor.
 - PMD sprites read natively: `[pet] pmd = AnimData.xml`, then
   `anim = <Name>, ...` in a section plays those SpriteCollab animations
   (all facings, frame durations, anchored frames, one picked at random
@@ -45,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cycle`, `durations` and `facing` adjust them.
   `tools/import_pmd.py` now downloads the raw sprite folder and writes
   such a `pet.ini` using every animation.
+- `tools/import_pmd.py` finds the Pokemon by name or dex number in
+  SpriteCollab's `tracker.json`, picks a form with `--form` / `--shiny`,
+  defaults the pet id and name, and lists the available sprites with
+  `--list`.
 - `[idle]` animation, played while standing still, and `[play]`
   animations, played once now and then after an idle pause.
 - `inplace = x | xy` for PMD animations: each frame follows his body mark
@@ -62,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- "Sleep when the mouse is idle" becomes "Sleep when mouse and keyboard
+  are idle": typing also keeps him awake, and wakes him up.
 - Snorlax is now the PMDCollab SpriteCollab sprite 0143 read as is, with
   all its animations (Walk, Idle, Attack / Shoot / Double when sulking,
   Hurt, Sleep, Stomp / Swing / Hop / Charge / Rotate to play, and Rotate
@@ -92,6 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frames are cached (16 MB per pet at most), ticks wait for the next frame
   change (polling the cursor every 100 ms at most) on coalescable timers,
   and the pets pause while the session is locked or the display is off.
+- Even lower CPU use: walking steps one sprite pixel per tick (half the
+  ticks at x2), the "Zzz" redraws once per sprite pixel of rise (~14 fps
+  instead of 25), and the cursor is checked less often while it is far
+  (up to 500 ms), or not at all when the pet ignores it.
+- Each "Z" of the "Zzz" grows steadily from 5 to 7.5 sprite pixels at any
+  size instead of in whole-scale steps.
+- Settings window: each checkbox column is as wide as its longest label.
 
 ### Fixed
 

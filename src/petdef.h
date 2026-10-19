@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -69,3 +70,9 @@ struct PetDef {
 
 // Loads every pets/*/pet.ini; skipped pets are reported in `errors`, one line each.
 std::vector<std::unique_ptr<PetDef>> LoadPetDefs(std::wstring& errors);
+// Loads pets/<id>/pet.ini; null with the reason in `error` when it fails.
+std::unique_ptr<PetDef> LoadPetDef(const std::wstring& id, std::wstring& error);
+// pets/ next to the exe.
+std::wstring PetsDir();
+// Fingerprint of each pets/<id>/ holding a pet.ini, by id: changes with any file added, removed or written.
+std::map<std::wstring, unsigned long long> StampPets();

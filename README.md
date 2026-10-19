@@ -36,23 +36,23 @@ controlled from the notification-area icon:
   LemmyPet" are at the bottom.
 - **Right-click**: "Settings...", show / hide all pets, "Quit".
 
-| Pet setting                         | Options                                   |
-| ----------------------------------- | ----------------------------------------- |
-| Visible                             | Show or hide this pet                     |
-| Size                                | Slider, x0.5 to x8 by 0.05 (default x2)   |
-| Speed                               | Slider, 20% to 400% by 5% (default 100%)  |
-| Activity                            | Lazy, Normal, Hyperactive                 |
-| When the mouse approaches           | Teleport bottom-right, flee, ignore       |
-| Opacity                             | 100% to 20%                               |
-| Roaming zone                        | Anywhere, screen edges, bottom of screen  |
-| White halo                          | 1 px white outline around him             |
-| Zzz while sleeping                  | Show "Zzz" while sleeping                 |
-| Draggable with the mouse            | Allow dragging him                        |
-| Sleep when the mouse is idle        | Falls asleep after 30 s of mouse idle     |
-| Type on his laptop when I type      | Types while you type                      |
-| Bubble with his lines               | Speech bubble while typing                |
-| Spider-Man mode (feet on the edges) | Walls and ceiling (screen edges zone)     |
-| Collide with other pets             | Bumps into pets that have it too, angry   |
+| Pet setting                            | Options                                  |
+| -------------------------------------- | ---------------------------------------- |
+| Visible                                | Show or hide this pet                    |
+| Size                                   | Slider, x0.5 to x8 by 0.05 (default x2)  |
+| Speed                                  | Slider, 20% to 400% by 5% (default 100%) |
+| Activity                               | Lazy, Normal, Hyperactive                |
+| When the mouse approaches              | Teleport bottom-right, flee, ignore      |
+| Opacity                                | 100% to 20%                              |
+| Roaming zone                           | Anywhere, screen edges, bottom of screen |
+| White halo                             | 1 px white outline around him            |
+| Zzz while sleeping                     | Show "Zzz" while sleeping                |
+| Draggable with the mouse               | Allow dragging him                       |
+| Sleep when mouse and keyboard are idle | Falls asleep after 30 s without input    |
+| Type on his laptop when I type         | Types while you type                     |
+| Bubble with his lines                  | Speech bubble while typing               |
+| Spider-Man mode (feet on the edges)    | Walls and ceiling (screen edges zone)    |
+| Collide with other pets                | Bumps into pets that have it too, angry  |
 
 ### Custom lyrics
 
@@ -64,7 +64,8 @@ bubble, lines starting with `#` are comments).
 
 Each pet is a folder `pets/<id>/` holding a `pet.ini` and the PNG sprite
 sheets it names; LemmyPet loads them all at startup and reports the broken
-ones. `pets/lemmy/pet.ini` uses a grid of cells, `pets/snorlax/pet.ini`
+ones. It then checks the folder every 5 seconds: added, deleted or edited
+pets are picked up without restarting. `pets/lemmy/pet.ini` uses a grid of cells, `pets/snorlax/pet.ini`
 a PMD sprite plus a hand-made laptop sheet.
 
 ```ini
@@ -135,12 +136,21 @@ facing = E              ; facing of a one-row sheet (default: S)
 Each frame keeps the sprite anchor (the frame center) at the same place,
 his feet on the lowest row of the first PMD animation (normally `[walk]`):
 frames above it stay in the air (hops), frames going lower are raised onto
-the floor (lunges toward the viewer). `tools/import_pmd.py <dex> <id> <name>
-[--sleep-head left|right]` downloads such a folder into `pets/<id>/` with a
+the floor (lunges toward the viewer).
+
+`tools/import_pmd.py` downloads such a folder into `pets/<id>/` with a
 `pet.ini` using every animation (the ones no other section takes go to
 `[play]`, sulking on the spot, playing on the spot but still jumping; CC
 BY-NC 4.0, credits in `credits.txt`); re-importing keeps its
-`lyrics` file and a `[type]` section with its own `sheet`.
+`lyrics` file and a `[type]` section with its own `sheet`:
+
+```sh
+tools/import_pmd.py --list pika                  # Pokemon with sprites, and their forms
+tools/import_pmd.py pikachu                      # pets/pikachu/, by name or dex number
+tools/import_pmd.py 25 --form cosplay --shiny    # pets/pikachu_cosplay_shiny/
+tools/import_pmd.py "mr. mime" mime Mimey        # own id and name
+tools/import_pmd.py snorlax --sleep-head right   # sleep sheet facing (default: left)
+```
 
 ## Build
 

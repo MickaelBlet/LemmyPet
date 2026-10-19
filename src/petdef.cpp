@@ -634,9 +634,68 @@ const Sprite& PetDef::Stand(int facing) const {
     return v[stand % v.size()];
 }
 
+namespace {
+
+// Mixes every file's path, size and write time below `dir` into `h` (FNV-1a).
+void StampDir(const std::wstring& dir, const std::wstring& rel, unsigned long long& h) {
+    const auto mix = [&](const void* data, size_t size) {
+        for (size_t i = 0; i < size; ++i) h = (h ^ static_cast<const unsigned char*>(data)[i]) * 1099511628211ULL;
+    };
+    WIN32_FIND_DATAW fd;
+    // No short names, bigger batches: fewer, cheaper calls.
+    HANDLE find = FindFirstFileExW(Join(dir, L"*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
+                                   FIND_FIRST_EX_LARGE_FETCH);
+    if (find == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.cFileName[0] == L'.' && (!fd.cFileName[1] || (fd.cFileName[1] == L'.' && !fd.cFileName[2]))) continue;
+        const std::wstring name = Join(rel, fd.cFileName);
+        mix(name.data(), name.size() * sizeof(wchar_t));
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            StampDir(Join(dir, fd.cFileName), name, h);
+        } else {
+            mix(&fd.nFileSizeLow, sizeof(fd.nFileSizeLow));
+            mix(&fd.nFileSizeHigh, sizeof(fd.nFileSizeHigh));
+            mix(&fd.ftLastWriteTime, sizeof(fd.ftLastWriteTime));
+        }
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+}
+
+}  // namespace
+
+std::wstring PetsDir() { return Join(ExeDir(), L"pets"); }
+
+std::map<std::wstring, unsigned long long> StampPets() {
+    std::map<std::wstring, unsigned long long> stamps;
+    const std::wstring root = PetsDir();
+    WIN32_FIND_DATAW fd;
+    HANDLE find = FindFirstFileW(Join(root, L"*").c_str(), &fd);
+    if (find == INVALID_HANDLE_VALUE) return stamps;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == L'.') continue;
+        const std::wstring dir = Join(root, fd.cFileName);
+        if (GetFileAttributesW(Join(dir, L"pet.ini").c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+        unsigned long long h = 14695981039346656037ULL;
+        StampDir(dir, L"", h);
+        stamps[fd.cFileName] = h;
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+    return stamps;
+}
+
+std::unique_ptr<PetDef> LoadPetDef(const std::wstring& id, std::wstring& error) {
+    Gdip gdip;
+    try {
+        return LoadPet(Join(PetsDir(), id), id, gdip);
+    } catch (const LoadError& e) {
+        error = e.what;
+        return nullptr;
+    }
+}
+
 std::vector<std::unique_ptr<PetDef>> LoadPetDefs(std::wstring& errors) {
     std::vector<std::unique_ptr<PetDef>> defs;
-    const std::wstring root = Join(ExeDir(), L"pets");
+    const std::wstring root = PetsDir();
     WIN32_FIND_DATAW fd;
     HANDLE find = FindFirstFileW(Join(root, L"*").c_str(), &fd);
     if (find == INVALID_HANDLE_VALUE) return defs;

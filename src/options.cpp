@@ -81,7 +81,7 @@ const Toggle kToggles[] = {
     {L"White halo", &Settings::halo, nullptr},
     {L"Zzz while sleeping", &Settings::zzz, nullptr},
     {L"Draggable with the mouse", &Settings::draggable, nullptr},
-    {L"Sleep when the mouse is idle", &Settings::sleepOnMouseIdle, nullptr},
+    {L"Sleep when mouse and keyboard are idle", &Settings::sleepOnIdle, nullptr},
     {L"Type on his laptop when I type", &Settings::typeWithUser, [](const Pet& p) { return p.def.canType; }},
     {L"Bubble with his lines", &Settings::keyBubble,
      [](const Pet& p) { return p.cfg.typeWithUser && HasBubble(p); }},
@@ -194,6 +194,22 @@ void Refresh() {
     }
 }
 
+// Lists g.pets, `selected` selected.
+void FillPetList(int selected) {
+    const HWND list = Item(IDC_PETS);
+    ui.syncing = true;
+    ListView_DeleteAllItems(list);
+    for (size_t i = 0; i < g.pets.size(); ++i) {
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = static_cast<int>(i);
+        item.pszText = const_cast<wchar_t*>(g.pets[i]->def.name.c_str());
+        ListView_InsertItem(list, &item);
+    }
+    ui.syncing = false;
+    SelectPet(selected);
+}
+
 HWND AddControl(const wchar_t* cls, const wchar_t* text, DWORD style, int id) {
     return CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 0, 0, ui.wnd,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
@@ -208,16 +224,7 @@ void CreateControls() {
     ListView_SetExtendedListViewStyle(list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
     LVCOLUMNW column{};
     ListView_InsertColumn(list, 0, &column);
-    ui.syncing = true;
-    for (size_t i = 0; i < g.pets.size(); ++i) {
-        LVITEMW item{};
-        item.mask = LVIF_TEXT;
-        item.iItem = static_cast<int>(i);
-        item.pszText = const_cast<wchar_t*>(g.pets[i]->def.name.c_str());
-        ListView_InsertItem(list, &item);
-    }
-    ui.syncing = false;
-    SelectPet(0);
+    FillPetList(0);
     AddControl(WC_BUTTONW, L"Select all", WS_TABSTOP | BS_PUSHBUTTON, IDC_ALL);
     for (size_t i = 0; i < ARRAYSIZE(kSliders); ++i) {
         const Slider& s = kSliders[i];
@@ -264,10 +271,28 @@ void Place(HWND h, int x, int y, int w, int height) {
     SetWindowPos(h, nullptr, x, y, w, height, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+// Width a checkbox needs to show its whole label in the current font.
+int CheckWidth(HWND h) {
+    wchar_t text[128];
+    const int len = GetWindowTextW(h, text, ARRAYSIZE(text));
+    const HDC dc = GetDC(h);
+    const HGDIOBJ old = SelectObject(dc, ui.font);
+    SIZE ext{};
+    GetTextExtentPoint32W(dc, text, len, &ext);
+    SelectObject(dc, old);
+    ReleaseDC(h, dc);
+    return GetSystemMetricsForDpi(SM_CXMENUCHECK, ui.dpi) + Px(8) + ext.cx;
+}
+
 // Positions the controls for the current DPI and font; returns the client size.
 SIZE LayoutControls() {
     const int listX = Px(kMargin), top = Px(kMargin);
-    const int x = listX + Px(kListW) + Px(kPad), innerW = Px(kLabelW) + Px(kComboW) + Px(40);
+    // Toggles in two columns, each as wide as its longest label.
+    int colW[2] = {};
+    for (size_t i = 0; i < ARRAYSIZE(kToggles); ++i)
+        colW[i % 2] = std::max(colW[i % 2], CheckWidth(Item(IDC_TOGGLE + static_cast<int>(i))));
+    const int x = listX + Px(kListW) + Px(kPad);
+    const int innerW = std::max(Px(kLabelW) + Px(kComboW) + Px(40), colW[0] + Px(kPad) + colW[1]);
     const int width = x + innerW + Px(kMargin);
     int y = top;
 
@@ -290,10 +315,10 @@ SIZE LayoutControls() {
     }
     y += Px(8);
 
-    const int colW = innerW / 2;
+    const int col2X = x + std::max(innerW / 2, colW[0] + Px(kPad));
     for (size_t i = 0; i < ARRAYSIZE(kToggles); ++i)
-        Place(Item(IDC_TOGGLE + static_cast<int>(i)), x + static_cast<int>(i % 2) * colW,
-              y + static_cast<int>(i / 2) * Px(kToggleRowH), colW, Px(kCheckH));
+        Place(Item(IDC_TOGGLE + static_cast<int>(i)), i % 2 ? col2X : x,
+              y + static_cast<int>(i / 2) * Px(kToggleRowH), i % 2 ? x + innerW - col2X : col2X - x, Px(kCheckH));
     y += static_cast<int>((ARRAYSIZE(kToggles) + 1) / 2 - 1) * Px(kToggleRowH) + Px(kCheckH);
     const HWND list = Item(IDC_PETS);
     Place(list, listX, top, Px(kListW), y - top - Px(kButtonH) - Px(6));
@@ -471,6 +496,16 @@ void OpenOptions() {
 
 void RefreshOptions() {
     if (ui.wnd) Refresh();
+}
+
+void RebuildOptions() {
+    if (!ui.wnd) return;
+    // Keeps the same pet selected if he is still there.
+    const Pet* p = SelectedPet();
+    const std::wstring id = p ? p->def.id : std::wstring();
+    const auto it = std::find_if(g.pets.begin(), g.pets.end(), [&](const auto& q) { return q->def.id == id; });
+    FillPetList(it == g.pets.end() ? 0 : static_cast<int>(it - g.pets.begin()));
+    Refresh();
 }
 
 bool IsOptionsMessage(MSG& msg) {

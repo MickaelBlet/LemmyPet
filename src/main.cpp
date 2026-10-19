@@ -19,8 +19,9 @@ namespace {
 // Loads the pet definitions, reporting skipped ones; false when there is none.
 bool LoadDefs() {
     std::wstring errors;
+    g.stamps = StampPets();  // first: a change made while loading shows up at the next scan
     g.defs = LoadPetDefs(errors);
-    if (g.defs.empty()) {
+    if (g.defs.empty() && g.stamps.empty()) {
         errors = L"No pet found: LemmyPet looks for pets\\<name>\\pet.ini next to the exe.\n\n" + errors;
         MessageBoxW(nullptr, errors.c_str(), L"LemmyPet", MB_ICONERROR);
         return false;

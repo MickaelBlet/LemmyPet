@@ -56,7 +56,7 @@ void LoadSettings(Pet& p) {
         Clamp(static_cast<int>(read(L"Opacity", def.opacity)), 0, static_cast<int>(ARRAYSIZE(kOpacityPct)) - 1);
     p.cfg.zzz = read(L"Zzz", def.zzz) != 0;
     p.cfg.draggable = read(L"Draggable", def.draggable) != 0;
-    p.cfg.sleepOnMouseIdle = read(L"SleepOnMouseIdle", def.sleepOnMouseIdle) != 0;
+    p.cfg.sleepOnIdle = read(L"SleepOnMouseIdle", def.sleepOnIdle) != 0;
     p.cfg.typeWithUser = read(L"TypeWithUser", def.typeWithUser) != 0;
     p.cfg.keyBubble = read(L"KeyBubble", def.keyBubble) != 0;
     // Falls back to the former bottom-only toggle.
@@ -77,7 +77,7 @@ void SaveSettings(Pet& p) {
     WriteDword(key, L"Opacity", p.cfg.opacity);
     WriteDword(key, L"Zzz", p.cfg.zzz);
     WriteDword(key, L"Draggable", p.cfg.draggable);
-    WriteDword(key, L"SleepOnMouseIdle", p.cfg.sleepOnMouseIdle);
+    WriteDword(key, L"SleepOnMouseIdle", p.cfg.sleepOnIdle);
     WriteDword(key, L"TypeWithUser", p.cfg.typeWithUser);
     WriteDword(key, L"KeyBubble", p.cfg.keyBubble);
     WriteDword(key, L"Zone", p.cfg.zone);

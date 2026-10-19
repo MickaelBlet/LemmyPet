@@ -79,12 +79,11 @@ void BlendPixel(Pet& p, int x, int y, uint32_t r, uint32_t gr, uint32_t b, doubl
     d = mix(24, 255) | mix(16, r) | mix(8, gr) | mix(0, b);
 }
 
-// Draws a pixel-art "Z" (5x5 glyph, s px per glyph pixel) with a 1 px dark outline.
-void DrawZ(Pet& p, int x0, int y0, int s, double a) {
+// Draws a pixel-art "Z" (5x5 glyph scaled nearest-neighbor to n x n px) with a 1 px dark outline.
+void DrawZ(Pet& p, int x0, int y0, int n, double a) {
     static const char* const kGlyph[5] = {"#####", "...#.", "..#..", ".#...", "#####"};
-    const int n = 5 * s;
     const auto inGlyph = [&](int px, int py) {
-        return px >= 0 && py >= 0 && px < n && py < n && kGlyph[py / s][px / s] == '#';
+        return px >= 0 && py >= 0 && px < n && py < n && kGlyph[py * 5 / n][px * 5 / n] == '#';
     };
     for (int py = -1; py <= n; ++py) {
         for (int px = -1; px <= n; ++px) {
@@ -119,13 +118,14 @@ void DrawZzz(Pet& p, ULONGLONG sleptMs, int orient) {
         if (age < 0) continue;
         const double t = static_cast<double>(age % life) / life;
         const double a = t < 0.15 ? t / 0.15 : (t > 0.7 ? (1.0 - t) / 0.3 : 1.0);
-        const int s = std::max(1, static_cast<int>(u * (t < 0.5 ? 1.0 : 1.5)));
+        // Grows steadily from 5 to 7.5 sprite pixels, whatever the scale.
+        const int n = std::max(5, static_cast<int>(std::lround(5.0 * u * (1.0 + 0.5 * t))));
         const int dx = static_cast<int>((p.def.zzzX + t * 10.0 + std::sin(t * 2.0 * kPi) * 2.0) * u);
-        const int x = p.padX + (p.sleepSide == 0 ? dx : p.cellW - dx - 5 * s);
-        const int y = p.padTop + static_cast<int>((p.def.zzzY - t * 33.0) * u);
-        const int half = 5 * s / 2;
+        const int x = p.padX + (p.sleepSide == 0 ? dx : p.cellW - dx - n);
+        const int y = p.padTop + static_cast<int>((p.def.zzzY - t * kZzzRiseUnits) * u);
+        const int half = n / 2;
         const POINT c = CanvasToWindow(p, x + half, y + half, orient);
-        DrawZ(p, c.x - half, c.y - half, s, a);
+        DrawZ(p, c.x - half, c.y - half, n, a);
     }
 }
 
@@ -232,7 +232,7 @@ void Render(Pet& p, const Sprite& frame, ULONGLONG now) {
     const BYTE alpha = static_cast<BYTE>(std::lround(p.alpha));
     const ULONGLONG slept = now - p.sleepStart;
     const long long overlay =
-        p.state == State::Sleep && p.cfg.zzz ? static_cast<long long>(slept / kZzzStepMs) : -1;
+        p.state == State::Sleep && p.cfg.zzz ? static_cast<long long>(slept / ZzzStepMs(p)) : -1;
     if (&frame == p.shown && overlay == p.shownOverlay && angle == p.shownAngle && pos.x == p.shownPos.x &&
         pos.y == p.shownPos.y && alpha == p.shownAlpha)
         return;

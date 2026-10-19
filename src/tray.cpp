@@ -4,6 +4,7 @@
 #include <wtsapi32.h>
 
 #include <algorithm>
+#include <string>
 
 #include "options.h"
 #include "resource.h"
@@ -17,6 +18,44 @@ constexpr UINT WM_APP_TRAY = WM_APP + 1;
 constexpr UINT IDM_SETTINGS = 1;
 constexpr UINT IDM_TOGGLE = 2;
 constexpr UINT IDM_QUIT = 3;
+
+constexpr UINT_PTR kRescanTimerId = 1;
+constexpr UINT kRescanMs = 5000;  // pets/ folder scan period
+
+HANDLE petsWatch = INVALID_HANDLE_VALUE;  // change notification on pets/, local drives only
+
+// Whether pets/ may have changed since the last call. On a local drive a change notification answers
+// without walking the folder; elsewhere (network, WSL) notifications may never come, so always true.
+bool PetsMayHaveChanged() {
+    if (petsWatch == INVALID_HANDLE_VALUE) {
+        const std::wstring dir = PetsDir();
+        wchar_t volume[MAX_PATH];
+        if (!GetVolumePathNameW(dir.c_str(), volume, MAX_PATH)) return true;
+        const UINT type = GetDriveTypeW(volume);
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) return true;
+        petsWatch = FindFirstChangeNotificationW(dir.c_str(), TRUE,
+                                                 FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+                                                     FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
+        return true;  // not watched until now
+    }
+    if (WaitForSingleObject(petsWatch, 0) != WAIT_OBJECT_0) return false;
+    // Rearmed before the scan, so changes made during it show up next time.
+    if (!FindNextChangeNotification(petsWatch)) {
+        FindCloseChangeNotification(petsWatch);
+        petsWatch = INVALID_HANDLE_VALUE;
+    }
+    return true;
+}
+
+// Balloon from the tray icon.
+void Notify(const std::wstring& text) {
+    NOTIFYICONDATAW nid = g.nid;
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_WARNING;
+    lstrcpynW(nid.szInfoTitle, L"Some pets could not be loaded", ARRAYSIZE(nid.szInfoTitle));
+    lstrcpynW(nid.szInfo, text.c_str(), ARRAYSIZE(nid.szInfo));
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
 
 void AddTrayIcon() {
     g.nid = NOTIFYICONDATAW{};
@@ -78,6 +117,12 @@ LRESULT CALLBACK TrayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         return TRUE;
+    case WM_TIMER:
+        if (wp == kRescanTimerId && PetsMayHaveChanged()) {
+            const std::wstring errors = ReloadPets();
+            if (!errors.empty()) Notify(errors);
+        }
+        return 0;
     case WM_INPUT:
         OnRawInput(reinterpret_cast<HRAWINPUT>(lp));
         break;  // DefWindowProc releases the input
@@ -93,6 +138,8 @@ LRESULT CALLBACK TrayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_DESTROY:
+        KillTimer(hwnd, kRescanTimerId);
+        if (petsWatch != INVALID_HANDLE_VALUE) FindCloseChangeNotification(petsWatch);
         WTSUnRegisterSessionNotification(hwnd);
         Shell_NotifyIconW(NIM_DELETE, &g.nid);
         DestroyPets();
@@ -130,4 +177,5 @@ void ShowTrayIcon(HINSTANCE inst) {
                                            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
     g.taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
     AddTrayIcon();
+    SetTimer(g.tray, kRescanTimerId, kRescanMs, nullptr);
 }
