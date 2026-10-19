@@ -4,7 +4,6 @@ CXXFLAGS = -O2 -Wall -Wextra -std=c++17 -municode -DUNICODE -D_UNICODE -D_WIN32_
 LDFLAGS  = -mwindows -municode -static -s
 LIBS     = -lshlwapi -lgdi32 -luser32 -lshell32 -lole32 -ladvapi32 -lcomctl32 -lwtsapi32
 TARGET   = LemmyPet.exe
-SPRITES  = $(wildcard sprites/*.png)
 OBJS     = $(patsubst src/%.cpp,build/%.o,$(wildcard src/*.cpp))
 HEADERS  = $(wildcard src/*.h)
 
@@ -21,9 +20,6 @@ build/app.res.o: src/app.rc src/resource.h src/app.ico src/app.manifest | build
 
 src/app.ico: pets/lemmy/lemmy.png tools/make_icon.py
 	python3 tools/make_icon.py
-
-pets/lemmy/lemmy.png: $(SPRITES) tools/make_sheet.py
-	python3 tools/make_sheet.py
 
 build:
 	mkdir -p build

@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-CELL = 45                         # see make_sheet.py
+CELL = 45                         # cell in pets/lemmy/pet.ini
 FRONT_STANDING = (CELL, 0, 2 * CELL, CELL)
 HEAD_BOTTOM = 27                  # first row of the vest
 SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64)]

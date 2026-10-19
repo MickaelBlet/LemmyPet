@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings window (`src/options.cpp`), opened by clicking the tray icon:
   pets listed on the left, drop-down lists and checkboxes applied right away,
   plus "Run at startup" and "Quit LemmyPet".
+- `.gitignore` for the exe, `build/` and `__pycache__/`.
 
 ### Changed
 
@@ -109,6 +110,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Each "Z" of the "Zzz" grows steadily from 5 to 7.5 sprite pixels at any
   size instead of in whole-scale steps.
 - Settings window: each checkbox column is as wide as its longest label.
+
+### Removed
+
+- `sprites/`, `lemmy_save.png` and the tools that built Lemmy's sheet
+  from them (`tools/make_sprites.py`, `tools/make_sheet.py`,
+  `tools/pad_sheet.py`): `pets/lemmy/lemmy.png` is now edited by hand and
+  no longer rebuilt by `make`.
 
 ### Fixed
 

@@ -2,7 +2,7 @@
 """Build demo.gif, the animated preview shown in README.md, from pets/lemmy/lemmy.png.
 
 Lemmy walks in, types on his laptop, sulks, walks back and falls asleep.
-Sheet rows are documented in make_sheet.py.
+Sheet rows are the sections of pets/lemmy/pet.ini.
 """
 from pathlib import Path
 from PIL import Image

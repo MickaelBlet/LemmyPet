@@ -161,13 +161,11 @@ make
 ```
 
 Requires `x86_64-w64-mingw32-g++`, and Python 3 with Pillow to regenerate the
-assets. Lemmy's sprite sheet `pets/lemmy/lemmy.png` and the icon are rebuilt
-from `sprites/` when needed:
+assets. Lemmy's sprite sheet `pets/lemmy/lemmy.png` is edited by hand; the
+icon is rebuilt from it when needed:
 
 | Script                  | Output                                    |
 | ----------------------- | ----------------------------------------- |
-| `tools/make_sheet.py`   | `pets/lemmy/lemmy.png` (`--preview` for a zoomed copy) |
-| `tools/pad_sheet.py`    | `pets/lemmy/lemmy.png` from the hand-edited `lemmy_save.png` |
 | `tools/make_icon.py`    | `src/app.ico`                             |
 | `tools/make_demo.py`    | `demo.gif` shown above                    |
 | `tools/import_pmd.py`   | `pets/<id>/` from a SpriteCollab sprite   |
