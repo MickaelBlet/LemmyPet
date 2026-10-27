@@ -403,10 +403,17 @@ void CheckCollisions(Pet& p, ULONGLONG now) {
     }
 }
 
-void TeleportAway(Pet& p, ULONGLONG now) {
+// Teleports to the bottom-right corner, or to the top-left one (bottom-left in the bottom zone) when the
+// cursor would be near him there.
+void TeleportAway(Pet& p, POINT cursor, ULONGLONG now) {
     const RECT area = CurrentWalkArea(p);
     p.x = area.right - p.cellW;
     p.y = area.bottom - p.cellH;
+    if (std::hypot(cursor.x - (p.x + p.cellW / 2.0), cursor.y - (p.y + p.cellH / 2.0)) <
+        kNearRadiusUnits * Scale(p)) {
+        p.x = area.left;
+        if (p.cfg.zone != kBottom) p.y = area.top;
+    }
     EnterSulk(p, now);
 }
 
@@ -616,10 +623,9 @@ void Tick(Pet& p) {
     const bool cursorNear = p.cursorGap < 0.0;
     // In draggable mode, hovering the sprite itself never scares him, so he can be grabbed.
     const bool hovered = cursorNear && p.cfg.draggable && WindowFromPoint(cursor) == p.hwnd;
-    // A fight with another pet never holds him back from reacting to the cursor.
+    // Being dazed or sulking never holds him back from reacting to the cursor.
     const auto wary = [&p, hovered] {
-        const bool dazed = (p.state == State::Bump || p.state == State::Sulk) && !p.petBump;
-        return p.cfg.reaction != kIgnore && !hovered && !dazed && p.state != State::Flee && p.state != State::Drag;
+        return p.cfg.reaction != kIgnore && !hovered && p.state != State::Flee && p.state != State::Drag;
     };
 
     if (!cursorNear) {
@@ -629,7 +635,7 @@ void Tick(Pet& p) {
         else if (now - p.nearSince >= kReactDelayMs) {
             p.shakeX = 0;
             p.petBump = false;
-            if (p.cfg.reaction == kTeleport) TeleportAway(p, now);
+            if (p.cfg.reaction == kTeleport) TeleportAway(p, cursor, now);
             else EnterFlee(p, cursor);
         }
     }
