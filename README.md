@@ -12,7 +12,8 @@ He never steals focus and clicks go right through him.
 - **Wanders the desktop**: walks, idles, sleeps (with floating "Zzz") and bumps
   into screen edges.
 - **Reacts to the mouse**: fades out when the cursor comes near, then teleports
-  to the bottom-right corner, flees to a corner, or ignores it.
+  to the bottom-right corner (top-left if the cursor waits there), flees to a
+  corner, or ignores it. Sulking or dazed, he still runs off right away.
 - **Types along with you**: when you type, he pulls out his laptop and a speech
   bubble spells Lemmy lines, one character per keystroke. The real keys are
   never shown.
