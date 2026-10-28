@@ -1,5 +1,7 @@
 #include "typing.h"
 
+#include <oleacc.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -15,9 +17,42 @@ constexpr ULONGLONG kBubbleLingerMs = 5000;  // bubble text stays this long afte
 constexpr size_t kBubbleMaxChars = 12;     // last characters of the current line shown in the bubble
 constexpr ULONGLONG kDotsMs = 10000;       // "..." bubble shown after each finished line
 constexpr ULONGLONG kDotsStepMs = 300;     // one more dot lit per step, then none
+constexpr UINT kCaretDelayMs = 60;         // after a keystroke, time for the app to move its caret
 
 // Whether he types along with the user.
 bool TypesAlong(const Pet& p) { return p.cfg.visible && p.cfg.typeWithUser && p.def.canType; }
+
+// Whether he gets out of the way of the text being typed.
+bool AvoidsText(const Pet& p) { return p.cfg.visible && p.cfg.avoidText; }
+
+// Screen rectangle of the text caret in the foreground window: the system caret, or else the one
+// accessibility reports (browsers, Electron apps). False when the app exposes neither.
+bool CaretRect(RECT& out) {
+    const HWND fg = GetForegroundWindow();
+    if (!fg || IsHungAppWindow(fg)) return false;
+    GUITHREADINFO gti{};
+    gti.cbSize = sizeof(gti);
+    if (!GetGUIThreadInfo(GetWindowThreadProcessId(fg, nullptr), &gti)) return false;
+    if (gti.hwndCaret && gti.rcCaret.bottom > gti.rcCaret.top) {
+        out = gti.rcCaret;
+        MapWindowPoints(gti.hwndCaret, nullptr, reinterpret_cast<POINT*>(&out), 2);
+        return true;
+    }
+    IAccessible* acc = nullptr;
+    if (FAILED(AccessibleObjectFromWindow(gti.hwndFocus ? gti.hwndFocus : fg, static_cast<DWORD>(OBJID_CARET),
+                                          IID_IAccessible, reinterpret_cast<void**>(&acc))) ||
+        !acc)
+        return false;
+    VARIANT self;
+    VariantInit(&self);
+    self.vt = VT_I4;
+    self.lVal = CHILDID_SELF;
+    long x = 0, y = 0, w = 0, h = 0;
+    const bool found = SUCCEEDED(acc->accLocation(&x, &y, &w, &h, self)) && h > 0;
+    acc->Release();
+    if (found) out = {x, y, x + w, y + h};
+    return found;
+}
 
 // Starts a random line, other than the current one when possible.
 void NextLyric(Pet& p) {
@@ -135,7 +170,8 @@ bool HasBubble(const Pet& p) { return p.def.canType && !p.def.lyrics.empty(); }
 
 // Keystrokes arrive as raw input (no polling), only while a pet is shown and types along with the user.
 void UpdateKeyboardListener() {
-    const bool on = std::any_of(g.pets.begin(), g.pets.end(), [](const auto& p) { return TypesAlong(*p); });
+    const bool on = std::any_of(g.pets.begin(), g.pets.end(),
+                                [](const auto& p) { return TypesAlong(*p) || AvoidsText(*p); });
     RAWINPUTDEVICE rid{0x01, 0x06, static_cast<DWORD>(on ? RIDEV_INPUTSINK : RIDEV_REMOVE), on ? g.tray : nullptr};
     RegisterRawInputDevices(&rid, 1, sizeof(rid));
     if (!on) std::fill(std::begin(g.keyDown), std::end(g.keyDown), false);
@@ -152,13 +188,29 @@ void OnRawInput(HRAWINPUT handle) {
     const USHORT flags = ri.data.keyboard.Flags;
     if (vk <= 0 || vk >= 255) return;  // 255: part of an escaped sequence
     const bool down = !(flags & RI_KEY_BREAK);
-    if (down && !g.keyDown[vk])
+    if (down && !g.keyDown[vk]) {
         for (const auto& p : g.pets)
             if (TypesAlong(*p)) {
                 OnKeystroke(*p);
                 if (!g.Paused()) Tick(*p);  // shows it now rather than on his next (maybe slow) tick
             }
+        // Looks for the caret once the keystrokes pause a moment (each one restarts the wait).
+        if (std::any_of(g.pets.begin(), g.pets.end(), [](const auto& p) { return AvoidsText(*p); }))
+            SetTimer(g.tray, kCaretTimerId, kCaretDelayMs, nullptr);
+    }
     g.keyDown[vk] = down;
+}
+
+void AvoidCaret() {
+    KillTimer(g.tray, kCaretTimerId);
+    RECT caret;
+    if (g.Paused() || !CaretRect(caret)) return;
+    const ULONGLONG now = GetTickCount64();
+    for (const auto& p : g.pets) {
+        if (!AvoidsText(*p)) continue;
+        AvoidText(*p, caret, now);
+        Tick(*p);  // moves now rather than on his next (maybe slow) tick
+    }
 }
 
 void HideBubble(Pet& p) {

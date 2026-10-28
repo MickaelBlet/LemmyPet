@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "behavior.h"
+#include "behind.h"
 #include "options.h"
 #include "render.h"
 #include "settings.h"
@@ -74,6 +75,7 @@ void DestroyPet(Pet& p) {
     if (p.bubbleDc) DeleteDC(p.bubbleDc);
     if (p.bubbleDib) DeleteObject(p.bubbleDib);
     if (p.bubbleFont) DeleteObject(p.bubbleFont);
+    FreeBehind(p);
 }
 
 LRESULT CALLBACK PetProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -135,6 +137,7 @@ void SetVisible(Pet& p, bool visible) {
         p.typed.clear();
     }
     UpdateKeyboardListener();
+    UpdateBehindWatch();
 }
 
 // Stops or restarts the shown pets' ticks as the session locks or the display turns off and back.
@@ -245,6 +248,7 @@ std::wstring ReloadPets() {
     });
     g.stamps = std::move(stamps);
     UpdateKeyboardListener();
+    UpdateBehindWatch();
     RebuildOptions();
     return errors;
 }

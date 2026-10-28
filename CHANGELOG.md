@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- "Move away from the text I type" setting (on by default): when a pet or
+  his bubble covers the text caret, he teleports to a corner or flees, per
+  the mouse reaction. The caret comes from the system caret or, for
+  browsers and Electron apps, from accessibility (`src/typing.cpp`).
+- "Move away when things move behind him" setting (off by default): the
+  screen behind his body is sampled 4 times a second and two changes within
+  2 s send him away the same way. His windows are then excluded from screen
+  captures, recordings and screen sharing (`src/behind.cpp`).
+
 ## [0.0.3] - 2026-10-27
 
 ### Changed

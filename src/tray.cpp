@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <string>
 
+#include "behind.h"
 #include "options.h"
 #include "resource.h"
 #include "typing.h"
@@ -118,7 +119,11 @@ LRESULT CALLBACK TrayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return TRUE;
     case WM_TIMER:
-        if (wp == kRescanTimerId && PetsMayHaveChanged()) {
+        if (wp == kCaretTimerId) {
+            AvoidCaret();
+        } else if (wp == kBehindTimerId) {
+            CheckBehind();
+        } else if (wp == kRescanTimerId && PetsMayHaveChanged()) {
             const std::wstring errors = ReloadPets();
             if (!errors.empty()) Notify(errors);
         }
@@ -139,6 +144,7 @@ LRESULT CALLBACK TrayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, kRescanTimerId);
+        KillTimer(hwnd, kBehindTimerId);
         if (petsWatch != INVALID_HANDLE_VALUE) FindCloseChangeNotification(petsWatch);
         WTSUnRegisterSessionNotification(hwnd);
         Shell_NotifyIconW(NIM_DELETE, &g.nid);

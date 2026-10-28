@@ -8,6 +8,9 @@ bool HasBubble(const Pet& p);
 // Keystrokes arrive as raw input (no polling), only while a pet is shown and types along with the user.
 void UpdateKeyboardListener();
 void OnRawInput(HRAWINPUT handle);
+// Timer on the tray window armed by keystrokes; on it, AvoidCaret moves the pets off the text being typed.
+constexpr UINT_PTR kCaretTimerId = 2;
+void AvoidCaret();
 void HideBubble(Pet& p);
 // Time until the bubble's content changes on its own (ULLONG_MAX: never).
 ULONGLONG BubbleWait(const Pet& p, ULONGLONG now);

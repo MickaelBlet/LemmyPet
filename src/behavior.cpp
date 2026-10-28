@@ -29,6 +29,7 @@ constexpr ULONGLONG kDragLeanMs = 150;   // drag lean resets after this long wit
 constexpr double kFadedRatio = 0.47;    // opacity multiplier while the cursor is near
 constexpr double kFadeSpeed = 1500.0;    // alpha units per second
 constexpr double kTurnMs = 350.0;          // Spider-Man mode: time to roll a quarter turn around a corner
+constexpr int kTextAheadLines = 8;       // room kept clear right of the caret, in caret heights
 
 BOOL CALLBACK CollectMonitor(HMONITOR mon, HDC, LPRECT, LPARAM param) {
     MONITORINFO mi{};
@@ -339,20 +340,6 @@ void EnterBump(Pet& p, ULONGLONG now, bool sulkAfter) {
     p.petBump = false;
 }
 
-// Screen area his body covers: the cell minus the transparent room around his standing frame, turned
-// with him toward the edge his feet stick to.
-RECT BodyRect(Pet& p) {
-    const Sprite& s = p.def.Stand(kS);
-    const int gap = static_cast<int>(std::lround(p.def.sideGap * Scale(p)));
-    const int head = static_cast<int>(std::lround((p.def.cellH - s.lift - (s.h - s.top)) * Scale(p)));
-    int inset[4];  // by edge, numbered as orientations: 0 bottom, 1 left, 2 top, 3 right
-    inset[p.orient] = 0;
-    inset[(p.orient + 2) % 4] = head;
-    inset[(p.orient + 1) % 4] = inset[(p.orient + 3) % 4] = gap;
-    const LONG x = std::lround(p.x), y = std::lround(p.y);
-    return {x + inset[1], y + inset[2], x + p.cellW - inset[3], y + p.cellH - inset[0]};
-}
-
 // Pets that can run into each other right now (fleeing ones slip past the others).
 bool Solid(Pet& p) {
     return p.cfg.collisions && p.cfg.visible && p.state != State::Drag && p.state != State::Bump &&
@@ -403,23 +390,31 @@ void CheckCollisions(Pet& p, ULONGLONG now) {
     }
 }
 
-// Teleports to the bottom-right corner, or to the top-left one (bottom-left in the bottom zone) when the
-// cursor would be near him there.
-void TeleportAway(Pet& p, POINT cursor, ULONGLONG now) {
+// Moves to the bottom-right corner, or to the top-left one (bottom-left in the bottom zone) when he would
+// still be in the way there.
+template <typename InTheWay>
+void TeleportToCorner(Pet& p, InTheWay inTheWay) {
     const RECT area = CurrentWalkArea(p);
     p.x = area.right - p.cellW;
     p.y = area.bottom - p.cellH;
-    if (std::hypot(cursor.x - (p.x + p.cellW / 2.0), cursor.y - (p.y + p.cellH / 2.0)) <
-        kNearRadiusUnits * Scale(p)) {
+    if (inTheWay()) {
         p.x = area.left;
         if (p.cfg.zone != kBottom) p.y = area.top;
     }
+}
+
+// Teleports to a corner away from the cursor, then sulks.
+void TeleportAway(Pet& p, POINT cursor, ULONGLONG now) {
+    TeleportToCorner(p, [&] {
+        return std::hypot(cursor.x - (p.x + p.cellW / 2.0), cursor.y - (p.y + p.cellH / 2.0)) <
+               kNearRadiusUnits * Scale(p);
+    });
     EnterSulk(p, now);
 }
 
-// Runs to the work-area corner farthest from the cursor (skipping the one he already sits in).
-// In the edges zone, only corners reachable along the edge he is on.
-void EnterFlee(Pet& p, POINT cursor) {
+// Runs to the work-area corner farthest from `from` (skipping the one he already sits in), sulking on
+// arrival unless calm. In the edges zone, only corners reachable along the edge he is on.
+void EnterFlee(Pet& p, POINT from, bool calm = false) {
     const RECT area = CurrentWalkArea(p);
     const bool onEdge = p.cfg.zone == kEdges &&
                         (p.x == area.left || p.x == area.right - p.cellW || p.y == area.top ||
@@ -435,9 +430,9 @@ void EnterFlee(Pet& p, POINT cursor) {
         if (p.cfg.zone == kBottom && c[1] == area.top) continue;
         if (onEdge && c[0] != p.x && c[1] != p.y) continue;
         if (std::hypot(c[0] - p.x, c[1] - p.y) < 10.0 * Scale(p)) continue;
-        const double fromCursor = std::hypot(c[0] + p.cellW / 2.0 - cursor.x, c[1] + p.cellH / 2.0 - cursor.y);
-        if (fromCursor > best) {
-            best = fromCursor;
+        const double away = std::hypot(c[0] + p.cellW / 2.0 - from.x, c[1] + p.cellH / 2.0 - from.y);
+        if (away > best) {
+            best = away;
             p.tx = c[0];
             p.ty = c[1];
         }
@@ -446,6 +441,7 @@ void EnterFlee(Pet& p, POINT cursor) {
     p.fleeSpeed = std::max(Speed(p).walkSpeed * Scale(p) * kFleeSpeedFactor,
                            std::hypot(p.tx - p.x, p.ty - p.y) * 1000.0 / kFleeMaxMs);
     p.state = State::Flee;
+    p.calmFlee = calm;
     p.nearSince = 0;
 }
 
@@ -516,6 +512,20 @@ UINT TickPeriod(Pet& p, ULONGLONG now) {
 }  // namespace
 
 RECT CurrentWorkArea(Pet& p) { return CurrentMonitor(p).rcWork; }
+
+// Screen area his body covers: the cell minus the transparent room around his standing frame, turned
+// with him toward the edge his feet stick to.
+RECT BodyRect(Pet& p) {
+    const Sprite& s = p.def.Stand(kS);
+    const int gap = static_cast<int>(std::lround(p.def.sideGap * Scale(p)));
+    const int head = static_cast<int>(std::lround((p.def.cellH - s.lift - (s.h - s.top)) * Scale(p)));
+    int inset[4];  // by edge, numbered as orientations: 0 bottom, 1 left, 2 top, 3 right
+    inset[p.orient] = 0;
+    inset[(p.orient + 2) % 4] = head;
+    inset[(p.orient + 1) % 4] = inset[(p.orient + 3) % 4] = gap;
+    const LONG x = std::lround(p.x), y = std::lround(p.y);
+    return {x + inset[1], y + inset[2], x + p.cellW - inset[3], y + p.cellH - inset[0]};
+}
 
 // Spider-Man mode: the edge his feet stick to (see BlitCanvas); anywhere off an edge he stands upright.
 // In a corner, the edge he is walking along, else the one he came from (by default bottom corners count
@@ -652,7 +662,7 @@ void Tick(Pet& p) {
         break;
     case State::Flee:
         if (Turning(p)) break;
-        if (MoveToTarget(p, p.fleeSpeed * dt)) EnterBump(p, now, true);
+        if (MoveToTarget(p, p.fleeSpeed * dt)) EnterBump(p, now, !p.calmFlee);
         break;
     case State::Bump:
         MoveToTarget(p, kBumpKnockUnits * Scale(p) * 5.0 * dt);  // quick hop back, ~0.2 s
@@ -708,6 +718,43 @@ void Tick(Pet& p) {
 void ArmTimer(Pet& p, UINT period) {
     p.tickPeriod = period;
     SetCoalescableTimer(p.hwnd, kTimerId, period, nullptr, period / 8);
+}
+
+// Flees from `zone`, or teleports to a corner carrying on with what he was doing (walks end there), when
+// he or his bubble covers it. Returns whether he moved.
+bool MoveOutOfTheWay(Pet& p, const RECT& zone, ULONGLONG now) {
+    if (p.state == State::Drag || p.state == State::Flee) return false;
+    // The bubble keeps its place above his head as he moves (near enough, it is kept on screen).
+    const POINT bubbleOff{p.bubblePos.x - std::lround(p.x), p.bubblePos.y - std::lround(p.y)};
+    const auto inTheWay = [&] {
+        RECT hit;
+        const RECT body = BodyRect(p);
+        if (IntersectRect(&hit, &body, &zone)) return true;
+        if (!p.bubbleShown) return false;
+        const LONG bx = std::lround(p.x) + bubbleOff.x, by = std::lround(p.y) + bubbleOff.y;
+        const RECT bubble{bx, by, bx + p.bubbleW, by + p.bubbleH};
+        return IntersectRect(&hit, &bubble, &zone) != FALSE;
+    };
+    if (!inTheWay()) return false;
+    p.shakeX = 0;
+    p.petBump = false;
+    p.nearSince = 0;
+    if (p.cfg.reaction == kFlee) {
+        EnterFlee(p, {(zone.left + zone.right) / 2, (zone.top + zone.bottom) / 2}, true);
+        return true;
+    }
+    TeleportToCorner(p, inTheWay);
+    p.path.clear();
+    if (p.state == State::Walk || p.state == State::Bump) EnterIdle(p, now);
+    return true;
+}
+
+// Gets out of the way of the caret and of the room right of it.
+void AvoidText(Pet& p, const RECT& caret, ULONGLONG now) {
+    if (!p.cfg.visible || !p.cfg.avoidText) return;
+    const LONG line = std::max<LONG>(1, caret.bottom - caret.top);
+    MoveOutOfTheWay(p, {caret.left - line, caret.top - line, caret.right + kTextAheadLines * line, caret.bottom + line},
+                    now);
 }
 
 // Changes the display scale, keeping his feet where they were.

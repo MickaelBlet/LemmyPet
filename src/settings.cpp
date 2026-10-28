@@ -65,6 +65,8 @@ void LoadSettings(Pet& p) {
     p.cfg.spiderMan = read(L"SpiderMan", def.spiderMan) != 0;
     p.cfg.halo = ReadDword(key, L"Halo", p.def.halo) != 0;
     p.cfg.collisions = ReadDword(key, L"Collisions", def.collisions) != 0;
+    p.cfg.avoidText = ReadDword(key, L"AvoidText", def.avoidText) != 0;
+    p.cfg.avoidChanges = ReadDword(key, L"AvoidChanges", def.avoidChanges) != 0;
     p.cfg.visible = ReadDword(key, L"Visible", def.visible) != 0;
 }
 
@@ -84,6 +86,8 @@ void SaveSettings(Pet& p) {
     WriteDword(key, L"SpiderMan", p.cfg.spiderMan);
     WriteDword(key, L"Halo", p.cfg.halo);
     WriteDword(key, L"Collisions", p.cfg.collisions);
+    WriteDword(key, L"AvoidText", p.cfg.avoidText);
+    WriteDword(key, L"AvoidChanges", p.cfg.avoidChanges);
     WriteDword(key, L"Visible", p.cfg.visible);
 }
 

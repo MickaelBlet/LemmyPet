@@ -71,6 +71,8 @@ struct Settings {
     bool spiderMan = false;  // edges zone: keeps his feet on the edge he walks on (walls, ceiling)
     bool halo = true;        // 1 px white halo around him (default: his pet.ini)
     bool collisions = false; // bumps into the other pets that have it too, and gets angry
+    bool avoidText = true;   // moves away from the text caret he or his bubble covers while the user types
+    bool avoidChanges = false;  // moves away when what is behind him changes (hides him from screen captures)
     bool visible = true;
 };
 
@@ -131,6 +133,7 @@ struct Pet {
     bool petBump = false;        // current bump or sulk comes from running into another pet
     int turnAxis = -1;           // edges zone: axis (0 = x, 1 = y) of the next walk after a corner bump
     double fleeSpeed = 0.0;      // screen px per second of the current flee
+    bool calmFlee = false;       // current flee dodges the text being typed: ends idle, not sulking
     ULONGLONG bumpStart = 0;
     int shakeX = 0;              // render-only horizontal jitter
     POINT dragOffset{};       // cursor position relative to the sprite cell while dragging
@@ -156,6 +159,15 @@ struct Pet {
     POINT bubblePos{INT_MIN, INT_MIN};
     BYTE bubbleAlpha = 0;
     bool bubbleShown = false;
+
+    bool hiddenFromCapture = false;  // screen captures see through his windows (see UpdateBehindWatch)
+    HDC behindDc = nullptr;
+    HBITMAP behindDib = nullptr;
+    uint32_t* behindBits = nullptr;
+    int behindW = 0, behindH = 0;
+    std::vector<uint32_t> behindLast;  // last sample of what is behind his body
+    RECT behindRect{};                 // screen area of that sample; empty: none yet
+    ULONGLONG behindChangeAt = 0;      // last change seen behind him, 0 when none lately
 };
 
 struct App {

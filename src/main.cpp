@@ -39,6 +39,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\LemmyPet.SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
     std::srand(GetTickCount());
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // accessibility queries for the text caret
     if (StartupEnabled()) SetStartup(true);  // keep the path current if the exe moved
     if (!LoadDefs()) return 1;
 

@@ -17,6 +17,12 @@ He never steals focus and clicks go right through him.
 - **Types along with you**: when you type, he pulls out his laptop and a speech
   bubble spells Lemmy lines, one character per keystroke. The real keys are
   never shown.
+- **Stays out of your text**: when he or his bubble covers the text cursor
+  you are typing at, he teleports to a corner (or flees, per the mouse
+  setting). Works with classic Windows apps, browsers and Electron apps.
+- **Notices things moving behind him** (optional): text showing up, a video, a
+  window opening under him sends him away the same way. He then no longer
+  shows up in screenshots, recordings or screen sharing.
 - **Spider-Man mode**: in the "screen edges" zone, he walks on the walls and the
   ceiling, rolling smoothly around corners from one edge to the next.
 - **Draggable** (optional): grab him with the mouse and drop him elsewhere.
@@ -54,6 +60,8 @@ controlled from the notification-area icon:
 | Bubble with his lines                  | Speech bubble while typing               |
 | Spider-Man mode (feet on the edges)    | Walls and ceiling (screen edges zone)    |
 | Collide with other pets                | Bumps into pets that have it too, angry  |
+| Move away from the text I type         | Dodges the text cursor while you type    |
+| Move away when things move behind him  | Off by default; hides him from captures  |
 
 ### Custom lyrics
 

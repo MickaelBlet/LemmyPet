@@ -7,6 +7,7 @@
 #include <cwchar>
 
 #include "behavior.h"
+#include "behind.h"
 #include "render.h"
 #include "resource.h"
 #include "settings.h"
@@ -87,6 +88,8 @@ const Toggle kToggles[] = {
      [](const Pet& p) { return p.cfg.typeWithUser && HasBubble(p); }},
     {L"Spider-Man mode (feet on the edges)", &Settings::spiderMan, [](const Pet& p) { return p.cfg.zone == kEdges; }},
     {L"Collide with other pets", &Settings::collisions, nullptr},
+    {L"Move away from the text I type", &Settings::avoidText, nullptr},
+    {L"Move away when things move behind him", &Settings::avoidChanges, nullptr},
 };
 
 struct Ui {
@@ -161,8 +164,10 @@ void ApplyToggle(Pet& p, bool Settings::*field, bool on) {
     p.cfg.*field = on;
     if (field == &Settings::draggable) {
         ApplyClickThrough(p);
-    } else if (field == &Settings::typeWithUser) {
+    } else if (field == &Settings::typeWithUser || field == &Settings::avoidText) {
         UpdateKeyboardListener();
+    } else if (field == &Settings::avoidChanges) {
+        UpdateBehindWatch();
     } else if (field == &Settings::halo) {
         DropFrames(p);  // redrawn on the next tick
     } else if (field == &Settings::keyBubble) {
